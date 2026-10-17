@@ -5,6 +5,7 @@ import pytest
 
 from loopkit.client import XAIClient
 from loopkit.errors import LoopError
+from loopkit.loop import BOOK_MAX_OUTPUT_TOKENS
 from loopkit.schemas import Draft
 
 
@@ -49,5 +50,14 @@ def test_parse_uses_grok_and_does_not_store_messages(monkeypatch: pytest.MonkeyP
     assert parsed.answer == "hello"
     assert calls["client"] == {"api_key": "test-key", "timeout": 12}
     assert calls["create"] == {"model": "grok-4.7", "store_messages": False}
+
+    calls.clear()
+    client = XAIClient(model="grok-4.7", api_key="test-key", max_output_tokens=BOOK_MAX_OUTPUT_TOKENS)
+    client.parse(system_text="rules", user_text="task", schema=Draft)
+    assert calls["create"] == {
+        "model": "grok-4.7",
+        "store_messages": False,
+        "max_tokens": BOOK_MAX_OUTPUT_TOKENS,
+    }
     assert calls["schema"] is Draft
     assert calls["messages"] == [("system", "rules"), ("user", "task")]

@@ -8,7 +8,19 @@ from pathlib import Path
 
 from loopkit.errors import LoopError
 
-ALLOWED_KEYS = {"knowledge", "instructions", "model", "provider", "base_url", "max_turns", "top_k"}
+ALLOWED_KEYS = {
+    "knowledge",
+    "instructions",
+    "model",
+    "provider",
+    "base_url",
+    "max_turns",
+    "top_k",
+    "check_mode",
+    "response",
+}
+CHECK_MODES = ("each", "all")
+RESPONSES = ("normal", "book")
 FILENAME = "loopkit.toml"
 
 
@@ -21,6 +33,8 @@ class Project:
     base_url: str | None
     max_turns: int | None
     top_k: int | None
+    check_mode: str | None
+    response: str | None
     directory: Path
 
 
@@ -59,6 +73,8 @@ def load_project(path: str | Path | None = None) -> Project:
         base_url=_optional_str(data.get("base_url"), "base_url", file.name),
         max_turns=_optional_int(data.get("max_turns"), "max_turns", file.name),
         top_k=_optional_int(data.get("top_k"), "top_k", file.name),
+        check_mode=_optional_choice(data.get("check_mode"), "check_mode", file.name, CHECK_MODES),
+        response=_optional_choice(data.get("response"), "response", file.name, RESPONSES),
         directory=base,
     )
 
@@ -93,12 +109,10 @@ def _instructions(value: object, filename: str) -> tuple[str, ...] | None:
         raise LoopError(f"instructions in {filename} must list at least one instruction.")
     items: list[str] = []
     for item in value:
-        if not isinstance(item, str):
+        if not isinstance(item, str) or not item.strip():
             raise LoopError(f"instructions in {filename} must be a list of non-empty strings.")
-        lines = [line.strip() for line in item.splitlines() if line.strip()]
-        if not lines:
-            raise LoopError(f"instructions in {filename} must be a list of non-empty strings.")
-        items.extend(lines)
+        # A list item is already one instruction. Line breaks inside it stay put.
+        items.append(item.strip())
     return tuple(items)
 
 
@@ -108,6 +122,20 @@ def _optional_str(value: object, name: str, filename: str) -> str | None:
     if not isinstance(value, str) or not value.strip():
         raise LoopError(f"{name} in {filename} must be a non-empty string.")
     return value
+
+
+def _optional_choice(
+    value: object,
+    name: str,
+    filename: str,
+    allowed: tuple[str, ...],
+) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or value.strip().lower() not in allowed:
+        names = ", ".join(allowed)
+        raise LoopError(f"{name} in {filename} must be one of: {names}.")
+    return value.strip().lower()
 
 
 def _optional_int(value: object, name: str, filename: str) -> int | None:

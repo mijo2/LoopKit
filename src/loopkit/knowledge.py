@@ -63,6 +63,8 @@ class Knowledge:
     warnings: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        """Reject an empty base, blank passages, and duplicate ids."""
+
         if not self.passages:
             raise LoopError("The knowledge base is empty.")
         ids = [passage.id for passage in self.passages]
@@ -73,6 +75,13 @@ class Knowledge:
 
     @classmethod
     def load(cls, source: KnowledgeLike) -> Knowledge:
+        """Read ``source`` and return passages in a stable order.
+
+        An existing ``Knowledge`` is returned unchanged. A path is read from
+        disk. A sentence is kept as text. A dict is name to text. A list is
+        walked in order.
+        """
+
         if isinstance(source, Knowledge):
             return source
         documents: list[tuple[str, str]] = []
@@ -92,6 +101,8 @@ KnowledgeLike = str | Path | Knowledge | Mapping[str, str] | Sequence[object]
 
 
 def _collect(source: object, documents: list[tuple[str, str]], warnings: list[str]) -> None:
+    """Append documents from one knowledge value."""
+
     if isinstance(source, Path):
         _collect_path(source.expanduser(), documents, warnings)
         return
@@ -113,6 +124,12 @@ def _collect(source: object, documents: list[tuple[str, str]], warnings: list[st
 
 
 def _collect_string(value: str, documents: list[tuple[str, str]], warnings: list[str]) -> None:
+    """Read a path when it exists. Otherwise keep a sentence as inline text.
+
+    A single token that is not a path is an error, so a missing folder is not
+    stored as the document.
+    """
+
     stripped = value.strip()
     if not stripped:
         raise LoopError("Knowledge text is empty.")
@@ -130,6 +147,8 @@ def _collect_string(value: str, documents: list[tuple[str, str]], warnings: list
 
 
 def _collect_mapping(source: Mapping[object, object], documents: list[tuple[str, str]]) -> None:
+    """Append each name and text pair. Both must be non-empty strings."""
+
     if not source:
         raise LoopError("The knowledge dict is empty.")
     for key, value in source.items():
@@ -143,6 +162,8 @@ def _collect_mapping(source: Mapping[object, object], documents: list[tuple[str,
 
 
 def _collect_path(path: Path, documents: list[tuple[str, str]], warnings: list[str]) -> None:
+    """Read one file, or every text file under a directory, in sorted order."""
+
     if path.is_file():
         _read_file(path, path.name, documents, warnings)
         return
@@ -158,6 +179,8 @@ def _collect_path(path: Path, documents: list[tuple[str, str]], warnings: list[s
 
 
 def _iter_files(directory: Path) -> list[Path]:
+    """Return files under ``directory``, skipping hidden names and ``SKIP_DIRS``."""
+
     files: list[Path] = []
     for dirpath, dirnames, filenames in os.walk(directory):
         dirnames[:] = sorted(
@@ -178,6 +201,12 @@ def _read_file(
     documents: list[tuple[str, str]],
     warnings: list[str],
 ) -> None:
+    """Append one text file, or record why it was skipped.
+
+    Unsupported types, empty files, and files over ``MAX_FILE_BYTES`` are
+    warnings. A directory of mixed files can still load.
+    """
+
     suffix = path.suffix.lower()
     if suffix not in TEXT_SUFFIXES:
         kind = suffix or "no suffix"
@@ -206,12 +235,16 @@ def _read_file(
 
 
 def _add_inline(documents: list[tuple[str, str]], text: str) -> None:
+    """Name inline text ``text``, then ``text-2``, ``text-3``, and so on."""
+
     seen = sum(1 for name, _ in documents if name == "text" or name.startswith("text-"))
     name = "text" if seen == 0 else f"text-{seen + 1}"
     documents.append((name, text))
 
 
 def _chunk_documents(documents: list[tuple[str, str]]) -> list[Passage]:
+    """Turn documents into ``p1``, ``p2``, ... by heading, then by size."""
+
     raw: list[tuple[str, str, str]] = []
     for source, text in documents:
         for heading, body in _sections(text):
@@ -232,6 +265,8 @@ def _sections(text: str) -> list[tuple[str, str]]:
     in_fence = False
 
     def flush() -> None:
+        """Store the heading and the lines gathered since the previous heading."""
+
         body = "\n".join(buffer).strip()
         if body:
             sections.append((heading, body))
@@ -254,6 +289,13 @@ def _sections(text: str) -> list[tuple[str, str]]:
 
 
 def _windows(body: str, size: int, overlap: int) -> list[str]:
+    """Pack paragraphs into chunks of about ``size`` characters.
+
+    A chunk keeps an overlap with the previous one so a sentence on the
+    boundary is not dropped. A paragraph longer than ``size`` is split by
+    character.
+    """
+
     body = body.strip()
     if not body:
         return []
@@ -289,6 +331,8 @@ def _windows(body: str, size: int, overlap: int) -> list[str]:
 
 
 def _hard_windows(text: str, size: int, overlap: int) -> list[str]:
+    """Slice ``text`` into fixed windows when it has no paragraph breaks."""
+
     if overlap >= size:
         overlap = 0
     chunks: list[str] = []

@@ -9,8 +9,8 @@ import pytest
 
 from loopkit.errors import LoopError
 from loopkit.httpapi import strict_json_schema
-from loopkit.loop import Loop
-from loopkit.schemas import Draft, DraftCheck, InstructionVerdict
+from loopkit.loop import BOOK_MAX_OUTPUT_TOKENS, Loop
+from loopkit.schemas import Draft, DraftCheck, GroundingCheck, InstructionVerdict, OneCheck
 from tests.fakes import ScriptedModel, accepted
 
 POLICY = "Refunds last 14 days after the charge."
@@ -63,7 +63,7 @@ def _request_json(request: urllib.request.Request) -> dict[str, object]:
 
 
 def test_schema_is_closed() -> None:
-    for schema in (Draft, DraftCheck):
+    for schema in (Draft, DraftCheck, OneCheck, GroundingCheck, InstructionVerdict):
         _assert_closed(strict_json_schema(schema))
 
 
@@ -107,8 +107,15 @@ def test_only_xai_key_uses_the_xai_client(monkeypatch: pytest.MonkeyPatch) -> No
     class Fake:
         provider = "xai"
 
-        def __init__(self, *, model: str, api_key: str, timeout: float) -> None:
-            created.update(model=model, api_key=api_key, timeout=timeout)
+        def __init__(
+            self,
+            *,
+            model: str,
+            api_key: str,
+            timeout: float,
+            max_output_tokens: int | None = None,
+        ) -> None:
+            created.update(model=model, api_key=api_key, timeout=timeout, max_output_tokens=max_output_tokens)
             self.model = model
 
     monkeypatch.setattr("loopkit.client.XAIClient", Fake)
@@ -116,6 +123,7 @@ def test_only_xai_key_uses_the_xai_client(monkeypatch: pytest.MonkeyPatch) -> No
     assert loop.provider == "xai"
     assert loop.model == "grok-4.7"
     assert created["api_key"] == "xai-test"
+    assert created["max_output_tokens"] is None
 
 
 def test_several_keys_require_a_provider(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -216,7 +224,19 @@ def test_anthropic_reads_the_text_block(monkeypatch: pytest.MonkeyPatch) -> None
     assert request.get_header("X-api-key") == "sk-ant"
     body = _request_json(request)
     assert body["model"] == "claude-sonnet-5-5"
+    assert body["max_tokens"] == 8192
     assert body["output_config"]["format"]["type"] == "json_schema"
+
+
+def test_book_response_raises_the_anthropic_output_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear(monkeypatch)
+    draft = Draft(answer="A long chapter.", cited_ids=[]).model_dump_json()
+    seen = _install(monkeypatch, {"content": [{"type": "text", "text": draft}]})
+    loop = Loop(knowledge=POLICY, api_key="sk-ant", provider="anthropic", response="book")
+    parsed = loop._client.parse(system_text="rules", user_text="task", schema=Draft)
+    assert parsed.answer == "A long chapter."
+    body = _request_json(seen[0])
+    assert body["max_tokens"] == BOOK_MAX_OUTPUT_TOKENS
 
 
 def test_http_error_is_a_loop_error(monkeypatch: pytest.MonkeyPatch) -> None:

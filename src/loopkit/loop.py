@@ -10,16 +10,28 @@ import os
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Protocol, TypeVar
+from typing import Literal, Protocol, TypeVar, cast
 
 from loopkit.client import DEFAULT_MODELS, make_client
-from loopkit.config import load_project
+from loopkit.config import CHECK_MODES, RESPONSES, load_project
 from loopkit.errors import LoopError
 from loopkit.knowledge import Knowledge, KnowledgeLike, Passage
-from loopkit.models import Answer, Check, Citation, InstructionCheck, StoppedReason
-from loopkit.prompts import CHECK_SYSTEM, DRAFT_SYSTEM, check_prompt, citation_ids, draft_prompt
+from loopkit.models import Answer, Check, Citation, InstructionCheck, ResponseKind, StoppedReason
+from loopkit.prompts import (
+    CHECK_ONE_SYSTEM,
+    CHECK_SYSTEM,
+    DRAFT_SYSTEM,
+    GROUND_SYSTEM,
+    check_one_prompt,
+    check_prompt,
+    citation_ids,
+    draft_prompt,
+    ground_prompt,
+)
 from loopkit.retrieve import select
-from loopkit.schemas import Draft, DraftCheck, InstructionVerdict
+from loopkit.schemas import Draft, DraftCheck, GroundingCheck, InstructionVerdict, OneCheck
+
+CheckMode = Literal["each", "all"]
 
 DEFAULT_MODEL = DEFAULT_MODELS["xai"]
 DEFAULT_MAX_TURNS = 3
@@ -31,6 +43,15 @@ DEFAULT_INSTRUCTIONS = (
     "If the passages do not contain the answer, say that clearly and do not guess.",
     "Be concise. Do not add facts that are not in the passages.",
 )
+BOOK_INSTRUCTIONS = (
+    "Answer the task using only the knowledge passages.",
+    "Cite supporting passages inline as [p1], [p2], and so on.",
+    "If the passages do not contain the answer, say that clearly and do not guess.",
+    "Write a long response with headings. It may be as long as a book when the passages support that. "
+    "Do not add facts that are not in the passages.",
+)
+# A book-length completion. Providers that cap lower reject the request.
+BOOK_MAX_OUTPUT_TOKENS = 100_000
 
 T = TypeVar("T")
 
@@ -63,6 +84,8 @@ class Loop:
         api_key: str | None = None,
         client: ModelClient | None = None,
         trace: bool | None = None,
+        check_mode: str | None = None,
+        response: str | None = None,
     ) -> None:
         if max_turns < 1:
             raise LoopError("max_turns must be at least 1.")
@@ -70,7 +93,11 @@ class Loop:
             raise LoopError("top_k must be at least 1.")
         if context_budget < 1:
             raise LoopError("context_budget must be at least 1.")
+        self.check_mode = cast(CheckMode, _choice(check_mode, "each", "check_mode", CHECK_MODES))
+        self.response = cast(ResponseKind, _choice(response, "normal", "response", RESPONSES))
         self.knowledge = knowledge if isinstance(knowledge, Knowledge) else Knowledge.load(knowledge)
+        if instructions is None and self.response == "book":
+            instructions = BOOK_INSTRUCTIONS
         self.instructions = normalize_instructions(instructions)
         self.max_turns = max_turns
         self.top_k = top_k
@@ -81,7 +108,14 @@ class Loop:
             self.model = (model or os.environ.get("LOOPKIT_MODEL", "")).strip() or DEFAULT_MODEL
             self._client: ModelClient = client
         else:
-            built = make_client(provider=provider, model=model, api_key=api_key, base_url=base_url)
+            output_tokens = BOOK_MAX_OUTPUT_TOKENS if self.response == "book" else None
+            built = make_client(
+                provider=provider,
+                model=model,
+                api_key=api_key,
+                base_url=base_url,
+                max_output_tokens=output_tokens,
+            )
             self.provider = built.provider
             self.model = built.model
             self._client = built
@@ -97,6 +131,8 @@ class Loop:
         base_url = overrides.pop("base_url", project.base_url)
         max_turns = overrides.pop("max_turns", project.max_turns)
         top_k = overrides.pop("top_k", project.top_k)
+        check_mode = overrides.pop("check_mode", project.check_mode)
+        response = overrides.pop("response", project.response)
         return cls(
             project.knowledge,
             instructions,
@@ -105,6 +141,8 @@ class Loop:
             base_url=None if base_url is None else str(base_url),
             max_turns=_override_int(max_turns, DEFAULT_MAX_TURNS, "max_turns"),
             top_k=_override_int(top_k, DEFAULT_TOP_K, "top_k"),
+            check_mode=None if check_mode is None else str(check_mode),
+            response=None if response is None else str(response),
             **overrides,  # type: ignore[arg-type]
         )
 
@@ -143,21 +181,11 @@ class Loop:
                     weak=retrieval.weak,
                     previous=previous,
                     feedback=feedback,
+                    response=self.response,
                 ),
                 schema=Draft,
             )
-            self._say(f"turn {turn}: check")
-            audit = self._step(
-                stage=f"check (turn {turn})",
-                system_text=CHECK_SYSTEM,
-                user_text=check_prompt(
-                    instructions=self.instructions,
-                    task=question,
-                    passages=retrieval.passages,
-                    draft=draft,
-                ),
-                schema=DraftCheck,
-            )
+            audit = self._audit(turn, question, retrieval.passages, draft)
             unknown = [cited for cited in citation_ids(draft) if cited not in known]
             problem, judged = _revision_problem(draft, audit, unknown, self.instructions)
             checks.append(_record(turn, audit, problem, unknown, judged))
@@ -166,15 +194,68 @@ class Loop:
                 self._say("instructions not followed: " + ", ".join(missed))
             if problem is None:
                 self._say("stop: passed")
-                return _finish(draft, known, checks, turn, "passed")
+                return _finish(draft, known, checks, turn, "passed", self.response)
             if turn == self.max_turns:
                 self._say("stop: max turns")
-                return _finish(draft, known, checks, turn, "max_turns")
+                return _finish(draft, known, checks, turn, "max_turns", self.response)
             self._say("revise")
             previous = draft
             feedback = problem
 
         raise LoopError("The loop ended without an answer.")
+
+    def _audit(self, turn: int, task: str, passages: Sequence[Passage], draft: Draft) -> DraftCheck:
+        """Check the draft.
+
+        ``each`` asks about one instruction per call, then checks grounding
+        once. ``all`` scores every instruction in a single call.
+        """
+
+        if self.check_mode == "all":
+            self._say(f"turn {turn}: check")
+            return self._step(
+                stage=f"check (turn {turn})",
+                system_text=CHECK_SYSTEM,
+                user_text=check_prompt(
+                    instructions=self.instructions,
+                    task=task,
+                    passages=passages,
+                    draft=draft,
+                    response=self.response,
+                ),
+                schema=DraftCheck,
+            )
+
+        verdicts: list[InstructionVerdict] = []
+        for number, instruction in enumerate(self.instructions, start=1):
+            self._say(f"turn {turn}: check instruction {number}")
+            one = self._step(
+                stage=f"check instruction {number} (turn {turn})",
+                system_text=CHECK_ONE_SYSTEM,
+                user_text=check_one_prompt(
+                    number=number,
+                    instruction=instruction,
+                    task=task,
+                    passages=passages,
+                    draft=draft,
+                ),
+                schema=OneCheck,
+            )
+            verdicts.append(InstructionVerdict(number=number, followed=one.followed, note=one.note))
+        self._say(f"turn {turn}: check grounding")
+        ground = self._step(
+            stage=f"check grounding (turn {turn})",
+            system_text=GROUND_SYSTEM,
+            user_text=ground_prompt(task=task, passages=passages, draft=draft),
+            schema=GroundingCheck,
+        )
+        return DraftCheck(
+            instructions=verdicts,
+            grounded=ground.grounded,
+            revise=ground.revise,
+            notes=ground.notes,
+            gaps=list(ground.gaps),
+        )
 
     def _step(self, *, stage: str, system_text: str, user_text: str, schema: type[T]) -> T:
         try:
@@ -210,24 +291,33 @@ def ask(
 
 
 def normalize_instructions(value: str | Sequence[str] | None) -> tuple[str, ...]:
-    """One instruction per non-empty line. None selects the built-in list."""
+    """Turn instructions into one entry per rule.
+
+    None selects the built-in list. A string is split on non-empty lines.
+    A list is already separate: each item is one instruction, and line breaks
+    inside an item stay part of that instruction.
+    """
 
     if value is None:
         return DEFAULT_INSTRUCTIONS
     if isinstance(value, str):
-        pieces: Sequence[object] = [value]
-    elif isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
-        pieces = list(value)
-    else:
-        raise LoopError("Instructions must be a string or a list of strings.")
-    lines: list[str] = []
-    for piece in pieces:
-        if not isinstance(piece, str):
-            raise LoopError("Each instruction must be a string.")
-        lines.extend(line.strip() for line in piece.splitlines() if line.strip())
-    if not lines:
-        raise LoopError("Instructions must contain at least one non-empty line.")
-    return tuple(lines)
+        lines = [line.strip() for line in value.splitlines() if line.strip()]
+        if not lines:
+            raise LoopError("Instructions must contain at least one non-empty line.")
+        return tuple(lines)
+    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+        items: list[str] = []
+        for piece in value:
+            if not isinstance(piece, str):
+                raise LoopError("Each instruction must be a string.")
+            text = piece.strip()
+            if not text:
+                raise LoopError("Each instruction must be a non-empty string.")
+            items.append(text)
+        if not items:
+            raise LoopError("Instructions must contain at least one non-empty line.")
+        return tuple(items)
+    raise LoopError("Instructions must be a string or a list of strings.")
 
 
 def _coerce_instructions(value: object) -> str | Sequence[str] | None:
@@ -241,6 +331,17 @@ def _coerce_instructions(value: object) -> str | Sequence[str] | None:
             items.append(item)
         return items
     raise LoopError("Instructions must be a string or a list of strings.")
+
+
+def _choice(value: object, default: str, name: str, allowed: tuple[str, ...]) -> str:
+    if value is None:
+        return default
+    if not isinstance(value, str):
+        raise LoopError(f"{name} must be one of: {', '.join(allowed)}.")
+    cleaned = value.strip().lower()
+    if cleaned not in allowed:
+        raise LoopError(f"{name} must be one of: {', '.join(allowed)}.")
+    return cleaned
 
 
 def _env_flag(name: str) -> bool:
@@ -356,6 +457,7 @@ def _finish(
     checks: list[Check],
     turns: int,
     reason: StoppedReason,
+    response: ResponseKind,
 ) -> Answer:
     citations: list[Citation] = []
     for cited in citation_ids(draft):
@@ -367,6 +469,7 @@ def _finish(
         )
     return Answer(
         text=draft.answer.strip(),
+        response=response,
         citations=tuple(citations),
         checks=tuple(checks),
         turns=turns,

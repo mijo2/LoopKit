@@ -47,7 +47,7 @@ flowchart TD
   check -->|needs a revision| draft
 ```
 
-Each turn is two model calls. The drafter writes an answer and cites passage ids. The checker returns a verdict for every instruction, judged on its own, plus grounding. The loop stops when every instruction holds, the draft stays inside the passages, citations are real ids, and the checker does not ask for another pass. Otherwise it revises, up to 3 turns, and the next draft is told which instructions failed. An accepted answer is two calls. A revised one is two calls per turn.
+The drafter writes an answer and cites passage ids. By default the checker then judges one instruction per call, so a long list is not scored all at once, and finishes with one grounding check. The loop stops when every instruction holds, the draft stays inside the passages, citations are real ids, and the checker does not ask for another pass. Otherwise it revises, up to 3 turns, and the next draft is told which instructions failed. `check_mode="all"` is the two-call turn: one draft, then one check that scores every instruction together.
 
 You bring documents and instructions. Chunking, retrieval, prompts, the checker, citation checks, and the stop condition ship in this repo. The loop itself is `src/loopkit/loop.py`.
 
@@ -58,6 +58,8 @@ You bring documents and instructions. Chunking, retrieval, prompts, the checker,
 | Provider | The one API key that is set. `provider` or `LOOPKIT_PROVIDER` chooses when several are set |
 | Model | That provider's default, unless you pass `model` or set `LOOPKIT_MODEL` |
 | Instructions | Four separate rules: answer only from the passages, cite ids, say when the answer is missing, and stay concise |
+| Check | `each`: one model call per instruction, then grounding. `all`: every instruction in one call |
+| Response | `normal`. `book` asks for a long response and raises the output cap to 100,000 tokens |
 | Turns | 3 |
 | Retrieval | The whole knowledge base under about 16,000 characters; otherwise a local lexical index, top 8 passages |
 | Stored prompts | Off for xAI and OpenAI. The request is still sent to the provider you configured |
@@ -80,7 +82,9 @@ loop = Loop(
 )
 ```
 
-A string is split into one instruction per non-empty line, which is how an instructions file is read. `loop.instructions` is always the tuple the checker validates.
+A string is split into one instruction per non-empty line, which is how an instructions file is read. A list is used as given: each item is one instruction, and line breaks inside an item stay part of that instruction. `loop.instructions` is always the tuple the checker validates.
+
+`check_mode="each"` validates those items one call at a time. `check_mode="all"` sends the whole list to one check. `response="book"` asks for a long-form answer with headings, instead of the concise default, and raises the output cap on the built-in clients. `response="normal"` is the direct answer.
 
 Or put the list in `loopkit.toml` and leave it out of code:
 
@@ -104,6 +108,7 @@ loopkit ask "Can I get a refund?"
 answer = loop.ask("What is the refund window?")
 answer.text
 answer.citations   # passages the draft cited
+answer.response    # "normal" or "book"
 answer.checks      # one auditor result per turn, with a verdict for each instruction
 answer.turns
 answer.stopped_reason  # "passed" or "max_turns"
@@ -162,6 +167,8 @@ knowledge = "knowledge"
 # base_url = "http://localhost:11434/v1"
 # max_turns = 3
 # top_k = 8
+# check_mode = "each"
+# response = "normal"
 ```
 
 Paths in the file are relative to the file. Passing `knowledge=` to `Loop` skips the file. The API key is never read from this file.

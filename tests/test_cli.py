@@ -5,7 +5,7 @@ import pytest
 
 from loopkit.cli import main
 from loopkit.schemas import Draft
-from tests.fakes import ScriptedModel, accepted, audit
+from tests.fakes import ScriptedModel, accepted, checks
 
 
 def test_init_then_ask(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
@@ -25,7 +25,7 @@ def test_init_then_ask(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: 
 
 
 def test_quiet_json_and_inline_knowledge(capsys: pytest.CaptureFixture[str]) -> None:
-    model = ScriptedModel(accepted("Fourteen days. [p1]", "p1"))
+    model = ScriptedModel(accepted("Fourteen days. [p1]", "p1", instructions=1))
     code = main(
         [
             "ask",
@@ -48,7 +48,7 @@ def test_quiet_json_and_inline_knowledge(capsys: pytest.CaptureFixture[str]) -> 
 
 
 def test_repeated_instructions_stay_separate(capsys: pytest.CaptureFixture[str]) -> None:
-    model = ScriptedModel(accepted("Fourteen days. [p1]", "p1"))
+    model = ScriptedModel(accepted("Fourteen days. [p1]", "p1", instructions=2))
     code = main(
         [
             "ask",
@@ -73,7 +73,7 @@ def test_repeated_instructions_stay_separate(capsys: pytest.CaptureFixture[str])
 def test_instructions_file_and_conflicts(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     path = tmp_path / "instructions.txt"
     path.write_text("Answer in Spanish.\n", encoding="utf-8")
-    model = ScriptedModel(accepted("Catorce días.", "p1"))
+    model = ScriptedModel(accepted("Catorce días.", "p1", instructions=1))
     code = main(
         [
             "ask",
@@ -125,7 +125,7 @@ def test_revision_trace_from_the_cli(capsys: pytest.CaptureFixture[str]) -> None
     model = ScriptedModel(
         [
             Draft(answer="Unsure.", cited_ids=[]),
-            audit(revise=True, notes="Name the window."),
+            *checks(revise=True, notes="Name the window."),
             *accepted("14 days. [p1]", "p1"),
         ]
     )

@@ -63,7 +63,14 @@ class XAIClient:
 
     provider = "xai"
 
-    def __init__(self, *, model: str, api_key: str | None = None, timeout: float = DEFAULT_TIMEOUT_SECONDS) -> None:
+    def __init__(
+        self,
+        *,
+        model: str,
+        api_key: str | None = None,
+        timeout: float = DEFAULT_TIMEOUT_SECONDS,
+        max_output_tokens: int | None = None,
+    ) -> None:
         if api_key is None:
             api_key = os.environ.get("XAI_API_KEY", "")
         api_key = api_key.strip()
@@ -72,6 +79,7 @@ class XAIClient:
         from xai_sdk import Client
 
         self.model = model
+        self._max_output_tokens = max_output_tokens
         self._sdk = Client(api_key=api_key, timeout=timeout)
 
     def parse(self, *, system_text: str, user_text: str, schema: type[object]) -> object:
@@ -79,7 +87,14 @@ class XAIClient:
 
         # Knowledge bases are often private. Do not store the prompt on the server.
         # The request itself is still sent to the API.
-        chat = self._sdk.chat.create(model=self.model, store_messages=False)
+        if self._max_output_tokens is None:
+            chat = self._sdk.chat.create(model=self.model, store_messages=False)
+        else:
+            chat = self._sdk.chat.create(
+                model=self.model,
+                store_messages=False,
+                max_tokens=self._max_output_tokens,
+            )
         chat.append(system(system_text))
         chat.append(user(user_text))
         _response, parsed = chat.parse(schema)
@@ -93,6 +108,7 @@ def make_client(
     api_key: str | None = None,
     base_url: str | None = None,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    max_output_tokens: int | None = None,
 ) -> XAIClient | OpenAIClient | AnthropicClient | OpenAICompatibleClient:
     choice = resolve_provider(provider, base_url=base_url)
     chosen_model = _choose_model(choice, model)
@@ -103,13 +119,14 @@ def make_client(
                 "The xAI provider uses the xAI SDK. "
                 "For a custom base URL, set provider to 'compatible'."
             )
-        return XAIClient(model=chosen_model, api_key=key, timeout=timeout)
+        return XAIClient(model=chosen_model, api_key=key, timeout=timeout, max_output_tokens=max_output_tokens)
     if choice.name == "openai":
         return OpenAIClient(
             model=chosen_model,
             api_key=key,
             base_url=choice.base_url or _DEFAULT_BASE["openai"],
             timeout=timeout,
+            max_output_tokens=max_output_tokens,
         )
     if choice.name == "anthropic":
         return AnthropicClient(
@@ -117,6 +134,7 @@ def make_client(
             api_key=key,
             base_url=choice.base_url or _DEFAULT_BASE["anthropic"],
             timeout=timeout,
+            max_output_tokens=max_output_tokens,
         )
     if not choice.base_url:
         raise LoopError("provider 'compatible' needs a base_url, for example http://localhost:11434/v1.")
@@ -125,6 +143,7 @@ def make_client(
         api_key=key,
         base_url=choice.base_url,
         timeout=timeout,
+        max_output_tokens=max_output_tokens,
     )
 
 

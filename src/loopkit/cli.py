@@ -42,6 +42,8 @@ knowledge = "knowledge"
 # base_url = "http://localhost:11434/v1"
 # max_turns = 3
 # top_k = 8
+# check_mode = "each"  # or "all"
+# response = "normal"  # or "book"
 """
 
 
@@ -71,6 +73,16 @@ def main(argv: list[str] | None = None, *, client: ModelClient | None = None) ->
     shared.add_argument("--provider", help="xai, openai, anthropic, or compatible. Default: the one API key that is set.")
     shared.add_argument("--base-url", help="OpenAI-compatible base URL, for example http://localhost:11434/v1.")
     shared.add_argument("--max-turns", type=int, help="Draft and check rounds. Default: 3.")
+    shared.add_argument(
+        "--check-mode",
+        choices=("each", "all"),
+        help="each checks one instruction per call. all checks every instruction in one call. Default: each.",
+    )
+    shared.add_argument(
+        "--response",
+        choices=("normal", "book"),
+        help="normal is a direct answer. book asks for a long response. Default: normal.",
+    )
 
     commands = parser.add_subparsers(dest="command", required=True)
     ask_command = commands.add_parser("ask", parents=[shared], help="Answer one task")
@@ -127,6 +139,10 @@ def _loop_from_args(args: argparse.Namespace, client: ModelClient | None, *, tra
         kwargs["base_url"] = args.base_url
     if args.max_turns is not None:
         kwargs["max_turns"] = args.max_turns
+    if args.check_mode:
+        kwargs["check_mode"] = args.check_mode
+    if args.response:
+        kwargs["response"] = args.response
     if trace is not None:
         kwargs["trace"] = trace
     if client is not None:

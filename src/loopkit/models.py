@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 StoppedReason = Literal["passed", "max_turns"]
+ResponseKind = Literal["normal", "book"]
 
 
 @dataclass(frozen=True)
@@ -46,9 +47,14 @@ class Check:
 
 @dataclass(frozen=True)
 class Answer:
-    """The user-facing text plus the trace of the loop that produced it."""
+    """The user-facing text plus the trace of the loop that produced it.
+
+    ``response`` is ``normal`` for an ordinary answer and ``book`` when the
+    loop was asked for a long-form response.
+    """
 
     text: str
+    response: ResponseKind
     citations: tuple[Citation, ...]
     checks: tuple[Check, ...]
     turns: int
@@ -60,6 +66,7 @@ class Answer:
     def to_dict(self) -> dict[str, object]:
         return {
             "text": self.text,
+            "response": self.response,
             "turns": self.turns,
             "stopped_reason": self.stopped_reason,
             "citations": [

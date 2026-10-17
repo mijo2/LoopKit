@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from loopkit.loop import DEFAULT_INSTRUCTIONS
-from loopkit.schemas import Draft, DraftCheck, InstructionVerdict
+from loopkit.schemas import Draft, DraftCheck, GroundingCheck, InstructionVerdict, OneCheck
 
 
 class ScriptedModel:
@@ -43,16 +43,37 @@ def _verdicts(
     return verdicts
 
 
-def accepted(answer: str, *ids: str) -> list[object]:
+def checks(
+    *,
+    revise: bool = False,
+    notes: str = "",
+    grounded: bool = True,
+    follows: bool = True,
+    gaps: list[str] | None = None,
+    failed: Sequence[int] = (),
+    instruction_count: int | None = None,
+) -> list[object]:
+    """One turn of per-instruction checks plus the grounding check."""
+
+    total = len(DEFAULT_INSTRUCTIONS) if instruction_count is None else instruction_count
+    failed_numbers = set(failed)
+    if not follows:
+        failed_numbers.add(1)
+    failure_note = notes if not follows or failed else ""
+    replies: list[object] = []
+    for number in range(1, total + 1):
+        missed = number in failed_numbers
+        replies.append(OneCheck(followed=not missed, note=failure_note if missed else ""))
+    replies.append(
+        GroundingCheck(grounded=grounded, revise=revise, notes=notes, gaps=gaps or [])
+    )
+    return replies
+
+
+def accepted(answer: str, *ids: str, instructions: int | None = None) -> list[object]:
     return [
         Draft(answer=answer, cited_ids=list(ids)),
-        DraftCheck(
-            instructions=_verdicts(),
-            grounded=True,
-            revise=False,
-            notes="",
-            gaps=[],
-        ),
+        *checks(instruction_count=instructions),
     ]
 
 

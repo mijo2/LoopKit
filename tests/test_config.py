@@ -25,7 +25,7 @@ def test_load_resolves_knowledge_next_to_the_toml(tmp_path: Path, monkeypatch: p
         "max_turns = 2\n",
     )
     monkeypatch.chdir(tmp_path / "..")
-    model = ScriptedModel(accepted("Bluebird. [p1]", "p1"))
+    model = ScriptedModel(accepted("Bluebird. [p1]", "p1", instructions=2))
     loop = Loop.load(tmp_path / "loopkit.toml", client=model)
     answer = loop.ask("What is the launch code?")
     assert answer.text == "Bluebird. [p1]"
@@ -47,7 +47,7 @@ def test_unknown_setting_and_bad_numbers(tmp_path: Path) -> None:
         Loop.load(tmp_path / "loopkit.toml", client=ScriptedModel([]))
 
 
-def test_a_multiline_instruction_item_is_one_rule_per_line(tmp_path: Path) -> None:
+def test_a_multiline_list_item_stays_one_instruction(tmp_path: Path) -> None:
     docs = tmp_path / "knowledge"
     docs.mkdir()
     (docs / "a.md").write_text("The launch code is bluebird.\n", encoding="utf-8")
@@ -56,7 +56,7 @@ def test_a_multiline_instruction_item_is_one_rule_per_line(tmp_path: Path) -> No
         'knowledge = "knowledge"\ninstructions = ["""\nBe brief.\nCite a passage.\n"""]\n',
     )
     loop = Loop.load(tmp_path / "loopkit.toml", client=ScriptedModel([]))
-    assert loop.instructions == ("Be brief.", "Cite a passage.")
+    assert loop.instructions == ("Be brief.\nCite a passage.",)
 
 
 def test_instructions_must_be_a_list(tmp_path: Path) -> None:
@@ -66,6 +66,23 @@ def test_instructions_must_be_a_list(tmp_path: Path) -> None:
 
     _project(tmp_path, 'knowledge = "knowledge"\ninstructions = []\n')
     with pytest.raises(LoopError, match="at least one"):
+        Loop.load(tmp_path / "loopkit.toml", client=ScriptedModel([]))
+
+
+def test_check_mode_and_response_come_from_the_file(tmp_path: Path) -> None:
+    docs = tmp_path / "knowledge"
+    docs.mkdir()
+    (docs / "a.md").write_text("The launch code is bluebird.\n", encoding="utf-8")
+    _project(
+        tmp_path,
+        'knowledge = "knowledge"\ncheck_mode = "all"\nresponse = "book"\n',
+    )
+    loop = Loop.load(tmp_path / "loopkit.toml", client=ScriptedModel([]))
+    assert loop.check_mode == "all"
+    assert loop.response == "book"
+
+    _project(tmp_path, 'knowledge = "knowledge"\ncheck_mode = "batch"\n')
+    with pytest.raises(LoopError, match="check_mode"):
         Loop.load(tmp_path / "loopkit.toml", client=ScriptedModel([]))
 
 

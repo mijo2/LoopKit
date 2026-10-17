@@ -67,14 +67,23 @@ class OpenAICompatibleClient:
 
     provider = "compatible"
 
-    def __init__(self, *, model: str, api_key: str, base_url: str, timeout: float) -> None:
+    def __init__(
+        self,
+        *,
+        model: str,
+        api_key: str,
+        base_url: str,
+        timeout: float,
+        max_output_tokens: int | None = None,
+    ) -> None:
         self.model = model
         self._api_key = api_key
         self._url = _join(base_url, "chat/completions")
         self._timeout = timeout
+        self._max_output_tokens = max_output_tokens
 
     def parse(self, *, system_text: str, user_text: str, schema: type[T]) -> T:
-        payload = {
+        payload: dict[str, object] = {
             "model": self.model,
             "messages": [
                 {"role": "system", "content": system_text},
@@ -89,6 +98,8 @@ class OpenAICompatibleClient:
                 },
             },
         }
+        if self._max_output_tokens is not None:
+            payload["max_tokens"] = self._max_output_tokens
         body = post_json(
             self._url,
             payload,
@@ -106,14 +117,23 @@ class OpenAIClient:
 
     provider = "openai"
 
-    def __init__(self, *, model: str, api_key: str, base_url: str, timeout: float) -> None:
+    def __init__(
+        self,
+        *,
+        model: str,
+        api_key: str,
+        base_url: str,
+        timeout: float,
+        max_output_tokens: int | None = None,
+    ) -> None:
         self.model = model
         self._api_key = api_key
         self._url = _join(base_url, "responses")
         self._timeout = timeout
+        self._max_output_tokens = max_output_tokens
 
     def parse(self, *, system_text: str, user_text: str, schema: type[T]) -> T:
-        payload = {
+        payload: dict[str, object] = {
             "model": self.model,
             "store": False,
             "input": [
@@ -129,6 +149,8 @@ class OpenAIClient:
                 }
             },
         }
+        if self._max_output_tokens is not None:
+            payload["max_output_tokens"] = self._max_output_tokens
         body = post_json(
             self._url,
             payload,
@@ -146,16 +168,25 @@ class AnthropicClient:
 
     provider = "anthropic"
 
-    def __init__(self, *, model: str, api_key: str, base_url: str, timeout: float) -> None:
+    def __init__(
+        self,
+        *,
+        model: str,
+        api_key: str,
+        base_url: str,
+        timeout: float,
+        max_output_tokens: int | None = None,
+    ) -> None:
         self.model = model
         self._api_key = api_key
         self._url = _anthropic_url(base_url)
         self._timeout = timeout
+        self._max_output_tokens = 8192 if max_output_tokens is None else max_output_tokens
 
     def parse(self, *, system_text: str, user_text: str, schema: type[T]) -> T:
         payload = {
             "model": self.model,
-            "max_tokens": 8192,
+            "max_tokens": self._max_output_tokens,
             "system": system_text,
             "messages": [{"role": "user", "content": user_text}],
             "output_config": {

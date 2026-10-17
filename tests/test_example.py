@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from loopkit.knowledge import Knowledge
-from loopkit.schemas import Draft, DraftCheck
+from loopkit.schemas import Draft, DraftCheck, GroundingCheck, OneCheck
 
 ROOT = Path(__file__).parents[1] / "examples" / "northwind"
 
@@ -18,7 +18,7 @@ def test_northwind_knowledge_and_schemas() -> None:
     assert "help@northwind.example" in instructions
     assert "Loop(" in (ROOT / "ask.py").read_text(encoding="utf-8")
 
-    for schema in (Draft, DraftCheck):
+    for schema in (Draft, DraftCheck, OneCheck, GroundingCheck):
         encoded = json.dumps(schema.model_json_schema())
         assert "minContains" not in encoded
         assert "maxContains" not in encoded
