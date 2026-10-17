@@ -112,7 +112,7 @@ def draft_prompt(
     instructions: Sequence[str],
     task: str,
     passages: Sequence[Passage],
-    weak: bool,
+    is_weak: bool,
     previous: Draft | None,
     feedback: str | None,
     response: str,
@@ -129,7 +129,7 @@ def draft_prompt(
     ]
     if response == "book":
         parts.extend(["", BOOK_REQUEST])
-    if weak:
+    if is_weak:
         parts.extend(["", WEAK_MATCH])
     if previous is not None and feedback:
         parts.extend(

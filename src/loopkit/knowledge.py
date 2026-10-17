@@ -47,7 +47,13 @@ CHUNK_OVERLAP = 200
 
 @dataclass(frozen=True)
 class Passage:
-    """One slice of a source document. ``id`` is what answers cite."""
+    """One slice of a source document.
+
+    ``id`` is the citation marker an answer uses, such as ``p1``. ``source``
+    is the file or inline name the slice came from. ``heading`` is the
+    markdown heading in force for this slice, or empty when the document has
+    none. ``text`` is the slice the model is allowed to use as evidence.
+    """
 
     id: str
     source: str
@@ -57,13 +63,24 @@ class Passage:
 
 @dataclass(frozen=True)
 class Knowledge:
-    """Passages in read order, plus notes about files that were skipped."""
+    """The passages a loop answers from, in the order they were read.
+
+    ``warnings`` lists files that were skipped and why. A load can succeed
+    and still carry warnings when a directory mixes text files with other
+    types, or when a file is empty or too large to read.
+    """
 
     passages: tuple[Passage, ...]
     warnings: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        """Reject an empty base, blank passages, and duplicate ids."""
+        """Refuse a knowledge base that cannot be cited.
+
+        An empty passage list is an error. So is a passage with a blank id
+        or blank text, and so are two passages that share an id. Ids are
+        what answers cite, so a duplicate would make a citation point at
+        more than one slice.
+        """
 
         if not self.passages:
             raise LoopError("The knowledge base is empty.")
@@ -75,11 +92,17 @@ class Knowledge:
 
     @classmethod
     def load(cls, source: KnowledgeLike) -> Knowledge:
-        """Read ``source`` and return passages in a stable order.
+        """Build a knowledge base from ``source``.
 
-        An existing ``Knowledge`` is returned unchanged. A path is read from
-        disk. A sentence is kept as text. A dict is name to text. A list is
-        walked in order.
+        A :class:`Knowledge` instance is returned unchanged. A path is read
+        from disk. A string that is not a path is kept as the document when
+        it contains whitespace, and rejected when it is a single missing
+        token such as ``docs``. A dict maps a document name to its text. A
+        list is read in order, and each item may itself be any of those forms.
+
+        Files are split on markdown headings and then into overlapping
+        chunks. Passage ids are assigned after that split, as ``p1``, ``p2``,
+        and so on, in read order.
         """
 
         if isinstance(source, Knowledge):
@@ -101,7 +124,13 @@ KnowledgeLike = str | Path | Knowledge | Mapping[str, str] | Sequence[object]
 
 
 def _collect(source: object, documents: list[tuple[str, str]], warnings: list[str]) -> None:
-    """Append documents from one knowledge value."""
+    """Read one knowledge value into ``documents``.
+
+    Each document is a ``(name, text)`` pair. ``warnings`` gains a line for
+    every file that is skipped. A list is walked from first item to last,
+    and each item is collected with the same rules as a top-level value.
+    Any other type raises ``LoopError``.
+    """
 
     if isinstance(source, Path):
         _collect_path(source.expanduser(), documents, warnings)
@@ -124,10 +153,14 @@ def _collect(source: object, documents: list[tuple[str, str]], warnings: list[st
 
 
 def _collect_string(value: str, documents: list[tuple[str, str]], warnings: list[str]) -> None:
-    """Read a path when it exists. Otherwise keep a sentence as inline text.
+    """Turn one string into a path read or an inline document.
 
-    A single token that is not a path is an error, so a missing folder is not
-    stored as the document.
+    Leading and trailing space is ignored. An empty string is an error. If
+    the remaining text is an existing file or directory, it is read from
+    disk. If it is not a path but it contains whitespace, it is stored as
+    inline text, even when the sentence mentions a file path. A single token
+    that is not an existing path is an error, so a missing folder name such
+    as ``docs`` is not stored as the document itself.
     """
 
     stripped = value.strip()
@@ -147,7 +180,13 @@ def _collect_string(value: str, documents: list[tuple[str, str]], warnings: list
 
 
 def _collect_mapping(source: Mapping[object, object], documents: list[tuple[str, str]]) -> None:
-    """Append each name and text pair. Both must be non-empty strings."""
+    """Store each dict entry as a named document.
+
+    Keys and values must both be strings. The name and the text are stripped,
+    and either being empty is an error. An empty dict is an error. The name
+    is later used as the passage source, so two entries with the same name
+    stay as two documents and are not merged.
+    """
 
     if not source:
         raise LoopError("The knowledge dict is empty.")
@@ -162,7 +201,14 @@ def _collect_mapping(source: Mapping[object, object], documents: list[tuple[str,
 
 
 def _collect_path(path: Path, documents: list[tuple[str, str]], warnings: list[str]) -> None:
-    """Read one file, or every text file under a directory, in sorted order."""
+    """Read a file, or every supported file under a directory.
+
+    Directory entries are visited in sorted order so passage ids stay the
+    same from one machine to another. A path that is neither a file nor a
+    directory is an error, and so is a directory with no files after hidden
+    names are skipped. The source label for a nested file is the directory
+    name, a slash, and the path relative to that directory.
+    """
 
     if path.is_file():
         _read_file(path, path.name, documents, warnings)
@@ -179,7 +225,13 @@ def _collect_path(path: Path, documents: list[tuple[str, str]], warnings: list[s
 
 
 def _iter_files(directory: Path) -> list[Path]:
-    """Return files under ``directory``, skipping hidden names and ``SKIP_DIRS``."""
+    """List files under ``directory`` in sorted order.
+
+    Hidden files and hidden directories are skipped. So are the directory
+    names in ``SKIP_DIRS``, including ``.git`` and virtualenvs. Those names
+    are removed from the walk before it descends, so their contents are never
+    considered.
+    """
 
     files: list[Path] = []
     for dirpath, dirnames, filenames in os.walk(directory):
@@ -201,10 +253,13 @@ def _read_file(
     documents: list[tuple[str, str]],
     warnings: list[str],
 ) -> None:
-    """Append one text file, or record why it was skipped.
+    """Read one file into ``documents``, or record why it was skipped.
 
-    Unsupported types, empty files, and files over ``MAX_FILE_BYTES`` are
-    warnings. A directory of mixed files can still load.
+    Only suffixes in ``TEXT_SUFFIXES`` are read. Another type, an empty
+    file, or a file larger than ``MAX_FILE_BYTES`` appends a warning and
+    returns, so a directory of mixed files can still load. Text is decoded
+    as UTF-8. Bytes that are not valid UTF-8 are replaced rather than
+    failing the whole file. The text is stripped before it is stored.
     """
 
     suffix = path.suffix.lower()
@@ -235,7 +290,13 @@ def _read_file(
 
 
 def _add_inline(documents: list[tuple[str, str]], text: str) -> None:
-    """Name inline text ``text``, then ``text-2``, ``text-3``, and so on."""
+    """Store inline text under a generated source name.
+
+    The first inline document is named ``text``. Later ones are ``text-2``,
+    ``text-3``, and so on. The number counts names already in ``documents``
+    that are ``text`` or start with ``text-``. That name becomes the passage
+    source shown with a citation.
+    """
 
     seen = sum(1 for name, _ in documents if name == "text" or name.startswith("text-"))
     name = "text" if seen == 0 else f"text-{seen + 1}"
@@ -243,7 +304,14 @@ def _add_inline(documents: list[tuple[str, str]], text: str) -> None:
 
 
 def _chunk_documents(documents: list[tuple[str, str]]) -> list[Passage]:
-    """Turn documents into ``p1``, ``p2``, ... by heading, then by size."""
+    """Split each document into passages and number them.
+
+    A document is split on markdown headings first. Each section is then
+    split into windows of about ``CHUNK_CHARS`` characters, overlapping by
+    ``CHUNK_OVERLAP`` so a sentence on a boundary is not dropped. Ids are
+    assigned only after every window exists, in that same order, starting
+    at ``p1``. The heading in force for a window is stored on the passage.
+    """
 
     raw: list[tuple[str, str, str]] = []
     for source, text in documents:
@@ -257,7 +325,15 @@ def _chunk_documents(documents: list[tuple[str, str]]) -> list[Passage]:
 
 
 def _sections(text: str) -> list[tuple[str, str]]:
-    """Split markdown on ATX headings, leaving fenced code blocks intact."""
+    """Split markdown into ``(heading, body)`` pairs.
+
+    A line that starts with ``#`` begins a new section. The heading text is
+    that line with the hashes and surrounding space removed. Lines inside a
+    fenced code block stay in the current section, including a ``#`` comment
+    in a code sample. A shebang (``#!``) is also left in the body. Text
+    before the first heading uses an empty heading. A document with no
+    headings at all returns one pair whose heading is empty.
+    """
 
     heading = ""
     buffer: list[str] = []
@@ -265,7 +341,12 @@ def _sections(text: str) -> list[tuple[str, str]]:
     in_fence = False
 
     def flush() -> None:
-        """Store the heading and the lines gathered since the previous heading."""
+        """Save the lines gathered since the previous heading.
+
+        The heading stored with the body is the one in force when those
+        lines were read. A section whose body is empty after stripping is
+        dropped, so a heading with nothing under it does not become a passage.
+        """
 
         body = "\n".join(buffer).strip()
         if body:
@@ -289,11 +370,15 @@ def _sections(text: str) -> list[tuple[str, str]]:
 
 
 def _windows(body: str, size: int, overlap: int) -> list[str]:
-    """Pack paragraphs into chunks of about ``size`` characters.
+    """Split ``body`` into chunks near ``size`` characters.
 
-    A chunk keeps an overlap with the previous one so a sentence on the
-    boundary is not dropped. A paragraph longer than ``size`` is split by
-    character.
+    A body that already fits is returned as one chunk. Otherwise it is
+    packed a paragraph at a time, breaking on blank lines. When the next
+    paragraph would pass ``size``, the current chunk is closed and the next
+    one starts with the last ``overlap`` characters of the previous chunk,
+    so a sentence that crosses the cut is still visible. A paragraph longer
+    than ``size`` has no blank line to break on, so it is sliced by character
+    instead.
     """
 
     body = body.strip()
@@ -331,7 +416,13 @@ def _windows(body: str, size: int, overlap: int) -> list[str]:
 
 
 def _hard_windows(text: str, size: int, overlap: int) -> list[str]:
-    """Slice ``text`` into fixed windows when it has no paragraph breaks."""
+    """Slice ``text`` into fixed windows of ``size`` characters.
+
+    Used when a body or a paragraph has no blank line to pack on. Each window
+    after the first starts ``overlap`` characters before the previous window
+    ended. An overlap greater than or equal to ``size`` is treated as no
+    overlap, so the start index still moves forward and the loop ends.
+    """
 
     if overlap >= size:
         overlap = 0

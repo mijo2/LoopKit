@@ -162,7 +162,7 @@ class Loop:
         self._say(
             f"{len(self.knowledge.passages)} passages loaded, {len(retrieval.passages)} sent to the model"
         )
-        if retrieval.weak:
+        if retrieval.is_weak:
             self._say("no lexical overlap; the drafter is told not to stretch a passage")
         known = {passage.id: passage for passage in retrieval.passages}
         checks: list[Check] = []
@@ -178,7 +178,7 @@ class Loop:
                     instructions=self.instructions,
                     task=question,
                     passages=retrieval.passages,
-                    weak=retrieval.weak,
+                    is_weak=retrieval.is_weak,
                     previous=previous,
                     feedback=feedback,
                     response=self.response,

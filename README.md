@@ -61,7 +61,7 @@ You bring documents and instructions. Chunking, retrieval, prompts, the checker,
 | Check | `each`: one model call per instruction, then grounding. `all`: every instruction in one call |
 | Response | `normal`. `book` asks for a long response and raises the output cap to 100,000 tokens |
 | Turns | 3 |
-| Retrieval | The whole knowledge base under about 16,000 characters; otherwise a local lexical index, top 8 passages |
+| Retrieval | The whole knowledge base under about 16,000 characters; otherwise a local RAG query (BM25), top 8 passages |
 | Stored prompts | Off for xAI and OpenAI. The request is still sent to the provider you configured |
 
 No vector database, no embedding model, and no agent graph.
