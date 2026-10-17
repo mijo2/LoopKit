@@ -10,7 +10,7 @@ import pytest
 from loopkit.errors import LoopError
 from loopkit.httpapi import strict_json_schema
 from loopkit.loop import Loop
-from loopkit.schemas import Draft, DraftCheck
+from loopkit.schemas import Draft, DraftCheck, InstructionVerdict
 from tests.fakes import ScriptedModel, accepted
 
 POLICY = "Refunds last 14 days after the charge."
@@ -64,9 +64,23 @@ def _request_json(request: urllib.request.Request) -> dict[str, object]:
 
 def test_schema_is_closed() -> None:
     for schema in (Draft, DraftCheck):
-        body = strict_json_schema(schema)
-        assert body["additionalProperties"] is False
-        assert set(body["required"]) == set(body["properties"])
+        _assert_closed(strict_json_schema(schema))
+
+
+def _assert_closed(node: object) -> None:
+    if isinstance(node, list):
+        for item in node:
+            _assert_closed(item)
+        return
+    if not isinstance(node, dict):
+        return
+    if node.get("type") == "object" or "properties" in node:
+        assert node["additionalProperties"] is False
+        properties = node["properties"]
+        assert isinstance(properties, dict)
+        assert set(node["required"]) == set(properties)
+    for value in node.values():
+        _assert_closed(value)
 
 
 def test_one_openai_key_selects_openai(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -179,7 +193,7 @@ def test_openai_responses_call_does_not_store_the_prompt(monkeypatch: pytest.Mon
 def test_anthropic_reads_the_text_block(monkeypatch: pytest.MonkeyPatch) -> None:
     _clear(monkeypatch)
     draft = DraftCheck(
-        follows_instructions=True,
+        instructions=[InstructionVerdict(number=1, followed=True, note="")],
         grounded=True,
         revise=False,
         notes="",

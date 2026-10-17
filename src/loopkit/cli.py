@@ -32,10 +32,10 @@ PROJECT_FILE = """\
 
 knowledge = "knowledge"
 
-# instructions = \"\"\"
-# You are the support assistant for this knowledge base.
-# Answer in under 120 words.
-# \"\"\"
+# instructions = [
+#   "You are the support assistant for this knowledge base.",
+#   "Answer in under 120 words.",
+# ]
 
 # provider = "openai"
 # model = "gpt-6.1-sol"
@@ -60,9 +60,13 @@ def main(argv: list[str] | None = None, *, client: ModelClient | None = None) ->
     shared.add_argument(
         "--instructions",
         "-i",
-        help="Instruction text. Replaces the built-in instructions.",
+        action="append",
+        help="One instruction. Repeat for another. Replaces the built-in instructions.",
     )
-    shared.add_argument("--instructions-file", help="Read instructions from this file.")
+    shared.add_argument(
+        "--instructions-file",
+        help="Read instructions from this file, one per non-empty line.",
+    )
     shared.add_argument("--model", help=f"Model id. Defaults to the provider's model, or LOOPKIT_MODEL. xAI default: {DEFAULT_MODEL}.")
     shared.add_argument("--provider", help="xai, openai, anthropic, or compatible. Default: the one API key that is set.")
     shared.add_argument("--base-url", help="OpenAI-compatible base URL, for example http://localhost:11434/v1.")
@@ -134,19 +138,20 @@ def _loop_from_args(args: argparse.Namespace, client: ModelClient | None, *, tra
     return Loop.load(**kwargs)
 
 
-def _instructions(args: argparse.Namespace) -> str | None:
+def _instructions(args: argparse.Namespace) -> list[str] | None:
     if args.instructions and args.instructions_file:
         raise LoopError("Pass either --instructions or --instructions-file.")
     if args.instructions_file:
         path = Path(args.instructions_file)
         if not path.is_file():
             raise LoopError(f"No instructions file at {path}.")
-        text = path.read_text(encoding="utf-8").strip()
-        if not text:
+        text = path.read_text(encoding="utf-8")
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if not lines:
             raise LoopError(f"Instructions file {path} is empty.")
-        return text
+        return lines
     if args.instructions:
-        return args.instructions
+        return list(args.instructions)
     return None
 
 

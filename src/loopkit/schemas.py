@@ -14,11 +14,26 @@ class Draft(BaseModel):
     )
 
 
-class DraftCheck(BaseModel):
-    """What the auditor returns. Code uses ``revise`` as the stop condition."""
+class InstructionVerdict(BaseModel):
+    """Whether the draft follows one numbered instruction."""
 
-    follows_instructions: bool = Field(
-        description="True only when the draft does what the user instructions require."
+    number: int = Field(description="The instruction number from the prompt, starting at 1.")
+    followed: bool = Field(
+        description="True only when the draft follows this instruction. Judge this instruction alone."
+    )
+    note: str = Field(
+        description="What to change so the draft follows this instruction. Empty when followed is true."
+    )
+
+
+class DraftCheck(BaseModel):
+    """What the auditor returns. Code judges every instruction verdict."""
+
+    instructions: list[InstructionVerdict] = Field(
+        description=(
+            "One verdict for every numbered instruction, using those numbers. "
+            "Judge each instruction on its own."
+        )
     )
     grounded: bool = Field(
         description=(

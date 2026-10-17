@@ -6,7 +6,7 @@ from loopkit.errors import LoopError
 from loopkit.knowledge import Knowledge, Passage
 from loopkit.client import DEFAULT_MODELS
 from loopkit.loop import DEFAULT_INSTRUCTIONS, DEFAULT_MODEL, Loop, ask
-from loopkit.models import Answer, Check, Citation
+from loopkit.models import Answer, Check, Citation, InstructionCheck
 
 try:
     __version__ = version("loop-kit")
@@ -20,6 +20,7 @@ __all__ = [
     "DEFAULT_INSTRUCTIONS",
     "DEFAULT_MODEL",
     "DEFAULT_MODELS",
+    "InstructionCheck",
     "Knowledge",
     "Loop",
     "LoopError",

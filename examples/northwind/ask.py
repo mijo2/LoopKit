@@ -18,10 +18,12 @@ DEFAULT_TASK = "I was charged 10 days ago. Can I get a refund?"
 
 def main() -> None:
     question = " ".join(sys.argv[1:]).strip() or DEFAULT_TASK
-    loop = Loop(
-        knowledge=ROOT / "knowledge",
-        instructions=(ROOT / "instructions.txt").read_text(encoding="utf-8"),
-    )
+    instructions = [
+        line.strip()
+        for line in (ROOT / "instructions.txt").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    loop = Loop(knowledge=ROOT / "knowledge", instructions=instructions)
     print(loop.ask(question))
 
 

@@ -19,7 +19,10 @@ def test_load_resolves_knowledge_next_to_the_toml(tmp_path: Path, monkeypatch: p
     (docs / "a.md").write_text("The launch code is bluebird.\n", encoding="utf-8")
     _project(
         tmp_path,
-        'knowledge = "knowledge"\ninstructions = "Be brief."\nmodel = "grok-4.7"\nmax_turns = 2\n',
+        'knowledge = "knowledge"\n'
+        'instructions = ["Be brief.", "Use the passages."]\n'
+        'model = "grok-4.7"\n'
+        "max_turns = 2\n",
     )
     monkeypatch.chdir(tmp_path / "..")
     model = ScriptedModel(accepted("Bluebird. [p1]", "p1"))
@@ -27,8 +30,11 @@ def test_load_resolves_knowledge_next_to_the_toml(tmp_path: Path, monkeypatch: p
     answer = loop.ask("What is the launch code?")
     assert answer.text == "Bluebird. [p1]"
     assert loop.max_turns == 2
-    assert "Be brief." in str(model.calls[0]["user"])
-    assert "bluebird" in str(model.calls[0]["user"])
+    assert loop.instructions == ("Be brief.", "Use the passages.")
+    prompt = str(model.calls[0]["user"])
+    assert "1. Be brief." in prompt
+    assert "2. Use the passages." in prompt
+    assert "bluebird" in prompt
 
 
 def test_unknown_setting_and_bad_numbers(tmp_path: Path) -> None:
@@ -38,6 +44,28 @@ def test_unknown_setting_and_bad_numbers(tmp_path: Path) -> None:
 
     _project(tmp_path, 'knowledge = "knowledge"\nmax_turns = true\n')
     with pytest.raises(LoopError, match="max_turns"):
+        Loop.load(tmp_path / "loopkit.toml", client=ScriptedModel([]))
+
+
+def test_a_multiline_instruction_item_is_one_rule_per_line(tmp_path: Path) -> None:
+    docs = tmp_path / "knowledge"
+    docs.mkdir()
+    (docs / "a.md").write_text("The launch code is bluebird.\n", encoding="utf-8")
+    _project(
+        tmp_path,
+        'knowledge = "knowledge"\ninstructions = ["""\nBe brief.\nCite a passage.\n"""]\n',
+    )
+    loop = Loop.load(tmp_path / "loopkit.toml", client=ScriptedModel([]))
+    assert loop.instructions == ("Be brief.", "Cite a passage.")
+
+
+def test_instructions_must_be_a_list(tmp_path: Path) -> None:
+    _project(tmp_path, 'knowledge = "knowledge"\ninstructions = "Be brief."\n')
+    with pytest.raises(LoopError, match="list of strings"):
+        Loop.load(tmp_path / "loopkit.toml", client=ScriptedModel([]))
+
+    _project(tmp_path, 'knowledge = "knowledge"\ninstructions = []\n')
+    with pytest.raises(LoopError, match="at least one"):
         Loop.load(tmp_path / "loopkit.toml", client=ScriptedModel([]))
 
 

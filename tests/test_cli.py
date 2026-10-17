@@ -47,6 +47,29 @@ def test_quiet_json_and_inline_knowledge(capsys: pytest.CaptureFixture[str]) -> 
     assert "Be brief." in str(model.calls[0]["user"])
 
 
+def test_repeated_instructions_stay_separate(capsys: pytest.CaptureFixture[str]) -> None:
+    model = ScriptedModel(accepted("Fourteen days. [p1]", "p1"))
+    code = main(
+        [
+            "ask",
+            "Refunds?",
+            "--knowledge",
+            "Refunds last 14 days after purchase.",
+            "--instructions",
+            "Be brief.",
+            "--instructions",
+            "Cite a passage.",
+            "--quiet",
+        ],
+        client=model,
+    )
+    assert code == 0
+    prompt = str(model.calls[0]["user"])
+    assert "1. Be brief." in prompt
+    assert "2. Cite a passage." in prompt
+    capsys.readouterr()
+
+
 def test_instructions_file_and_conflicts(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     path = tmp_path / "instructions.txt"
     path.write_text("Answer in Spanish.\n", encoding="utf-8")

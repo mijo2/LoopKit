@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from loopkit.schemas import Draft, DraftCheck
+from collections.abc import Sequence
+
+from loopkit.loop import DEFAULT_INSTRUCTIONS
+from loopkit.schemas import Draft, DraftCheck, InstructionVerdict
 
 
 class ScriptedModel:
@@ -20,11 +23,31 @@ class ScriptedModel:
         return reply
 
 
+def _verdicts(
+    count: int | None = None,
+    *,
+    follows: bool = True,
+    failed: Sequence[int] = (),
+    note: str = "",
+) -> list[InstructionVerdict]:
+    total = len(DEFAULT_INSTRUCTIONS) if count is None else count
+    failed_numbers = set(failed)
+    if not follows:
+        failed_numbers.add(1)
+    verdicts: list[InstructionVerdict] = []
+    for number in range(1, total + 1):
+        missed = number in failed_numbers
+        verdicts.append(
+            InstructionVerdict(number=number, followed=not missed, note=note if missed else "")
+        )
+    return verdicts
+
+
 def accepted(answer: str, *ids: str) -> list[object]:
     return [
         Draft(answer=answer, cited_ids=list(ids)),
         DraftCheck(
-            follows_instructions=True,
+            instructions=_verdicts(),
             grounded=True,
             revise=False,
             notes="",
@@ -33,9 +56,24 @@ def accepted(answer: str, *ids: str) -> list[object]:
     ]
 
 
-def audit(*, revise: bool, notes: str = "", grounded: bool = True, follows: bool = True, gaps: list[str] | None = None) -> DraftCheck:
+def audit(
+    *,
+    revise: bool,
+    notes: str = "",
+    grounded: bool = True,
+    follows: bool = True,
+    gaps: list[str] | None = None,
+    failed: Sequence[int] = (),
+    instruction_count: int | None = None,
+) -> DraftCheck:
+    failure_note = notes if not follows or failed else ""
     return DraftCheck(
-        follows_instructions=follows,
+        instructions=_verdicts(
+            instruction_count,
+            follows=follows,
+            failed=failed,
+            note=failure_note,
+        ),
         grounded=grounded,
         revise=revise,
         notes=notes,

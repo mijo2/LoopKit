@@ -1,12 +1,12 @@
 import json
 
 from loopkit.loop import DEFAULT_MODEL
-from loopkit.schemas import Draft, DraftCheck
+from loopkit.schemas import Draft, DraftCheck, InstructionVerdict
 
 
 def test_structured_output_schemas_stay_simple() -> None:
     assert DEFAULT_MODEL == "grok-4.7"
-    for schema in (Draft, DraftCheck):
+    for schema in (Draft, DraftCheck, InstructionVerdict):
         body = schema.model_json_schema()
         encoded = json.dumps(body)
         assert body["type"] == "object"

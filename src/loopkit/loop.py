@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Protocol, TypeVar
 
@@ -16,21 +16,21 @@ from loopkit.client import DEFAULT_MODELS, make_client
 from loopkit.config import load_project
 from loopkit.errors import LoopError
 from loopkit.knowledge import Knowledge, KnowledgeLike, Passage
-from loopkit.models import Answer, Check, Citation, StoppedReason
+from loopkit.models import Answer, Check, Citation, InstructionCheck, StoppedReason
 from loopkit.prompts import CHECK_SYSTEM, DRAFT_SYSTEM, check_prompt, citation_ids, draft_prompt
 from loopkit.retrieve import select
-from loopkit.schemas import Draft, DraftCheck
+from loopkit.schemas import Draft, DraftCheck, InstructionVerdict
 
 DEFAULT_MODEL = DEFAULT_MODELS["xai"]
 DEFAULT_MAX_TURNS = 3
 DEFAULT_TOP_K = 8
 DEFAULT_CONTEXT_BUDGET = 16_000
-DEFAULT_INSTRUCTIONS = """\
-Answer the task using only the knowledge passages.
-Cite supporting passages inline as [p1], [p2], and so on.
-If the passages do not contain the answer, say that clearly and do not guess.
-Be concise. Do not add facts that are not in the passages.
-"""
+DEFAULT_INSTRUCTIONS = (
+    "Answer the task using only the knowledge passages.",
+    "Cite supporting passages inline as [p1], [p2], and so on.",
+    "If the passages do not contain the answer, say that clearly and do not guess.",
+    "Be concise. Do not add facts that are not in the passages.",
+)
 
 T = TypeVar("T")
 
@@ -52,7 +52,7 @@ class Loop:
     def __init__(
         self,
         knowledge: KnowledgeLike,
-        instructions: str | None = None,
+        instructions: str | Sequence[str] | None = None,
         *,
         model: str | None = None,
         provider: str | None = None,
@@ -71,7 +71,7 @@ class Loop:
         if context_budget < 1:
             raise LoopError("context_budget must be at least 1.")
         self.knowledge = knowledge if isinstance(knowledge, Knowledge) else Knowledge.load(knowledge)
-        self.instructions = (instructions or DEFAULT_INSTRUCTIONS).strip()
+        self.instructions = normalize_instructions(instructions)
         self.max_turns = max_turns
         self.top_k = top_k
         self.context_budget = context_budget
@@ -91,7 +91,7 @@ class Loop:
         """Build a loop from ``loopkit.toml``."""
 
         project = load_project(path)
-        instructions = overrides.pop("instructions", project.instructions)
+        instructions = _coerce_instructions(overrides.pop("instructions", project.instructions))
         model = overrides.pop("model", project.model)
         provider = overrides.pop("provider", project.provider)
         base_url = overrides.pop("base_url", project.base_url)
@@ -99,7 +99,7 @@ class Loop:
         top_k = overrides.pop("top_k", project.top_k)
         return cls(
             project.knowledge,
-            None if instructions is None else str(instructions),
+            instructions,
             model=None if model is None else str(model),
             provider=None if provider is None else str(provider),
             base_url=None if base_url is None else str(base_url),
@@ -159,8 +159,11 @@ class Loop:
                 schema=DraftCheck,
             )
             unknown = [cited for cited in citation_ids(draft) if cited not in known]
-            problem = _revision_problem(draft, audit, unknown)
-            checks.append(_record(turn, audit, problem, unknown))
+            problem, judged = _revision_problem(draft, audit, unknown, self.instructions)
+            checks.append(_record(turn, audit, problem, unknown, judged))
+            missed = [str(item.number) for item in judged if not item.followed]
+            if missed:
+                self._say("instructions not followed: " + ", ".join(missed))
             if problem is None:
                 self._say("stop: passed")
                 return _finish(draft, known, checks, turn, "passed")
@@ -194,7 +197,7 @@ class Loop:
 def ask(
     task: str,
     knowledge: KnowledgeLike | None = None,
-    instructions: str | None = None,
+    instructions: str | Sequence[str] | None = None,
     **kwargs: object,
 ) -> Answer:
     """Answer one task. With no knowledge argument, read ``loopkit.toml``."""
@@ -204,6 +207,40 @@ def ask(
             kwargs["instructions"] = instructions
         return Loop.load(**kwargs).ask(task)
     return Loop(knowledge, instructions, **kwargs).ask(task)  # type: ignore[arg-type]
+
+
+def normalize_instructions(value: str | Sequence[str] | None) -> tuple[str, ...]:
+    """One instruction per non-empty line. None selects the built-in list."""
+
+    if value is None:
+        return DEFAULT_INSTRUCTIONS
+    if isinstance(value, str):
+        pieces: Sequence[object] = [value]
+    elif isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+        pieces = list(value)
+    else:
+        raise LoopError("Instructions must be a string or a list of strings.")
+    lines: list[str] = []
+    for piece in pieces:
+        if not isinstance(piece, str):
+            raise LoopError("Each instruction must be a string.")
+        lines.extend(line.strip() for line in piece.splitlines() if line.strip())
+    if not lines:
+        raise LoopError("Instructions must contain at least one non-empty line.")
+    return tuple(lines)
+
+
+def _coerce_instructions(value: object) -> str | Sequence[str] | None:
+    if value is None or isinstance(value, str):
+        return value
+    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+        items: list[str] = []
+        for item in value:
+            if not isinstance(item, str):
+                raise LoopError("Each instruction must be a string.")
+            items.append(item)
+        return items
+    raise LoopError("Instructions must be a string or a list of strings.")
 
 
 def _env_flag(name: str) -> bool:
@@ -218,7 +255,13 @@ def _override_int(value: object, default: int, name: str) -> int:
     return value
 
 
-def _revision_problem(draft: Draft, audit: DraftCheck, unknown: list[str]) -> str | None:
+def _revision_problem(
+    draft: Draft,
+    audit: DraftCheck,
+    unknown: list[str],
+    instructions: Sequence[str],
+) -> tuple[str | None, tuple[InstructionCheck, ...]]:
+    judged, instruction_problems = _judge_instructions(instructions, audit.instructions)
     problems: list[str] = []
     if not draft.answer.strip():
         problems.append("The draft was empty. Write the answer the user should read.")
@@ -227,9 +270,10 @@ def _revision_problem(draft: Draft, audit: DraftCheck, unknown: list[str]) -> st
         problems.append(
             f"These cited ids are not in the passages: {listed}. Cite only the ids you were given."
         )
-    # ``revise`` is the auditor's stop bit. A failed instruction or grounding
-    # flag also sends the draft back, even if the auditor left revise false.
-    needs_work = audit.revise or not audit.follows_instructions or not audit.grounded
+    problems.extend(instruction_problems)
+    # ``revise`` is the auditor's stop bit. Any instruction that was not followed,
+    # and a grounding miss, also send the draft back.
+    needs_work = bool(instruction_problems) or audit.revise or not audit.grounded
     if needs_work:
         note = audit.notes.strip()
         if note:
@@ -239,16 +283,66 @@ def _revision_problem(draft: Draft, audit: DraftCheck, unknown: list[str]) -> st
             if cleaned:
                 problems.append(f"Gap: {cleaned}")
         if not problems:
-            problems.append("The draft does not follow the instructions or is not grounded in the passages.")
+            problems.append(
+                "The draft does not follow the instructions or is not grounded in the passages."
+            )
     if not problems:
-        return None
-    return "\n".join(problems)
+        return None, judged
+    return "\n".join(problems), judged
 
 
-def _record(turn: int, audit: DraftCheck, problem: str | None, unknown: list[str]) -> Check:
+def _judge_instructions(
+    instructions: Sequence[str],
+    verdicts: Sequence[InstructionVerdict],
+) -> tuple[tuple[InstructionCheck, ...], list[str]]:
+    """Pair each instruction with the verdict of that number.
+
+    A missing verdict counts as not followed. When the same number is judged
+    twice, a failure wins.
+    """
+
+    by_number: dict[int, InstructionVerdict] = {}
+    for verdict in verdicts:
+        current = by_number.get(verdict.number)
+        if current is None or (current.followed and not verdict.followed):
+            by_number[verdict.number] = verdict
+
+    judged: list[InstructionCheck] = []
+    problems: list[str] = []
+    for number, instruction in enumerate(instructions, start=1):
+        verdict = by_number.get(number)
+        if verdict is not None and verdict.followed:
+            judged.append(
+                InstructionCheck(number=number, instruction=instruction, followed=True, note="")
+            )
+            continue
+        if verdict is None:
+            note = "The check did not judge this instruction."
+            problems.append(f"Instruction {number} was not judged: {instruction}")
+        else:
+            note = verdict.note.strip()
+            if note:
+                problems.append(f"Instruction {number} was not followed: {instruction}\n{note}")
+            else:
+                problems.append(f"Instruction {number} was not followed: {instruction}")
+        judged.append(
+            InstructionCheck(number=number, instruction=instruction, followed=False, note=note)
+        )
+    return tuple(judged), problems
+
+
+def _record(
+    turn: int,
+    audit: DraftCheck,
+    problem: str | None,
+    unknown: list[str],
+    instructions: Sequence[InstructionCheck],
+) -> Check:
+    recorded = tuple(instructions)
     return Check(
         turn=turn,
-        follows_instructions=audit.follows_instructions,
+        follows_instructions=all(item.followed for item in recorded),
+        instructions=recorded,
         grounded=audit.grounded and not unknown,
         revise=problem is not None,
         notes=problem if problem is not None else audit.notes.strip(),

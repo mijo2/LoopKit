@@ -19,11 +19,25 @@ class Citation:
 
 
 @dataclass(frozen=True)
+class InstructionCheck:
+    """Whether this draft followed one instruction."""
+
+    number: int
+    instruction: str
+    followed: bool
+    note: str
+
+
+@dataclass(frozen=True)
 class Check:
-    """One auditor result. ``revise`` is what the loop acted on."""
+    """One auditor result. ``revise`` is what the loop acted on.
+
+    ``follows_instructions`` is true only when every instruction held.
+    """
 
     turn: int
     follows_instructions: bool
+    instructions: tuple[InstructionCheck, ...]
     grounded: bool
     revise: bool
     notes: str
@@ -61,6 +75,15 @@ class Answer:
                 {
                     "turn": check.turn,
                     "follows_instructions": check.follows_instructions,
+                    "instructions": [
+                        {
+                            "number": item.number,
+                            "instruction": item.instruction,
+                            "followed": item.followed,
+                            "note": item.note,
+                        }
+                        for item in check.instructions
+                    ],
                     "grounded": check.grounded,
                     "revise": check.revise,
                     "notes": check.notes,

@@ -42,12 +42,12 @@ Install from this repository. The PyPI project named `loopkit` (no hyphen) is un
 flowchart TD
   task[Task] --> retrieve[Retrieve passages]
   retrieve --> draft[Draft under your instructions]
-  draft --> check[Check grounding and instructions]
+  draft --> check[Check each instruction and grounding]
   check -->|accepted| done[Return the answer]
   check -->|needs a revision| draft
 ```
 
-Each turn is two model calls. The drafter writes an answer and cites passage ids. The checker returns a structured verdict. The loop stops when the draft follows your instructions, stays inside the passages, cites real ids, and the checker does not ask for another pass. Otherwise it revises, up to 3 turns. An accepted answer is two calls. A revised one is two calls per turn.
+Each turn is two model calls. The drafter writes an answer and cites passage ids. The checker returns a verdict for every instruction, judged on its own, plus grounding. The loop stops when every instruction holds, the draft stays inside the passages, citations are real ids, and the checker does not ask for another pass. Otherwise it revises, up to 3 turns, and the next draft is told which instructions failed. An accepted answer is two calls. A revised one is two calls per turn.
 
 You bring documents and instructions. Chunking, retrieval, prompts, the checker, citation checks, and the stop condition ship in this repo. The loop itself is `src/loopkit/loop.py`.
 
@@ -57,7 +57,7 @@ You bring documents and instructions. Chunking, retrieval, prompts, the checker,
 | --- | --- |
 | Provider | The one API key that is set. `provider` or `LOOPKIT_PROVIDER` chooses when several are set |
 | Model | That provider's default, unless you pass `model` or set `LOOPKIT_MODEL` |
-| Instructions | Answer only from the passages, cite ids, and say when the answer is missing |
+| Instructions | Four separate rules: answer only from the passages, cite ids, say when the answer is missing, and stay concise |
 | Turns | 3 |
 | Retrieval | The whole knowledge base under about 16,000 characters; otherwise a local lexical index, top 8 passages |
 | Stored prompts | Off for xAI and OpenAI. The request is still sent to the provider you configured |
@@ -66,22 +66,30 @@ No vector database, no embedding model, and no agent graph.
 
 ## Instructions
 
+Instructions are a list. The checker judges each one on its own. The loop revises until every item holds, or the turn budget runs out. A miss is named in the notes for the next draft.
+
 Pass them when the built-in policy is not the one you want:
 
 ```python
 loop = Loop(
     knowledge="knowledge",
-    instructions="You are the Sample Co support assistant. Answer in under 80 words.",
+    instructions=[
+        "You are the Sample Co support assistant.",
+        "Answer in under 80 words.",
+    ],
 )
 ```
 
-Or put them in `loopkit.toml` and leave them out of code:
+A string is split into one instruction per non-empty line, which is how an instructions file is read. `loop.instructions` is always the tuple the checker validates.
+
+Or put the list in `loopkit.toml` and leave it out of code:
 
 ```toml
 knowledge = "knowledge"
-instructions = """
-You are the Sample Co support assistant. Answer in under 80 words.
-"""
+instructions = [
+  "You are the Sample Co support assistant.",
+  "Answer in under 80 words.",
+]
 ```
 
 The same `Loop` is what the terminal command calls. `loopkit ask` is a way to try a project without writing a script. It prints each step to stderr. `--quiet` prints the answer only. `--json` prints the answer object.
@@ -96,7 +104,7 @@ loopkit ask "Can I get a refund?"
 answer = loop.ask("What is the refund window?")
 answer.text
 answer.citations   # passages the draft cited
-answer.checks      # one auditor result per turn
+answer.checks      # one auditor result per turn, with a verdict for each instruction
 answer.turns
 answer.stopped_reason  # "passed" or "max_turns"
 ```
@@ -144,9 +152,10 @@ Point loop-kit at documents you are willing to send to the API.
 ```toml
 knowledge = "knowledge"
 
-# instructions = """
-# You are the support assistant for this knowledge base.
-# """
+# instructions = [
+#   "You are the support assistant for this knowledge base.",
+#   "Answer in under 120 words.",
+# ]
 
 # provider = "openai"
 # model = "gpt-6.1-sol"

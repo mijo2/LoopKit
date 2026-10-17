@@ -15,7 +15,7 @@ FILENAME = "loopkit.toml"
 @dataclass(frozen=True)
 class Project:
     knowledge: Path | tuple[Path, ...]
-    instructions: str | None
+    instructions: tuple[str, ...] | None
     model: str | None
     provider: str | None
     base_url: str | None
@@ -53,7 +53,7 @@ def load_project(path: str | Path | None = None) -> Project:
     base = file.parent
     return Project(
         knowledge=_knowledge(data["knowledge"], base, file.name),
-        instructions=_optional_str(data.get("instructions"), "instructions", file.name),
+        instructions=_instructions(data.get("instructions"), file.name),
         model=_optional_str(data.get("model"), "model", file.name),
         provider=_optional_str(data.get("provider"), "provider", file.name),
         base_url=_optional_str(data.get("base_url"), "base_url", file.name),
@@ -78,6 +78,28 @@ def _resolve(value: str, base: Path) -> Path:
     if not path.is_absolute():
         path = base / path
     return path
+
+
+def _instructions(value: object, filename: str) -> tuple[str, ...] | None:
+    """A project lists instructions so each one can be checked on its own."""
+
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        raise LoopError(
+            f"instructions in {filename} must be a list of strings, one instruction per item."
+        )
+    if not value:
+        raise LoopError(f"instructions in {filename} must list at least one instruction.")
+    items: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            raise LoopError(f"instructions in {filename} must be a list of non-empty strings.")
+        lines = [line.strip() for line in item.splitlines() if line.strip()]
+        if not lines:
+            raise LoopError(f"instructions in {filename} must be a list of non-empty strings.")
+        items.extend(lines)
+    return tuple(items)
 
 
 def _optional_str(value: object, name: str, filename: str) -> str | None:
