@@ -1,0 +1,38 @@
+# Dependabot opens pull requests when dependencies have newer versions.
+# Two ecosystems are watched:
+#   - github-actions: the `uses:` lines in .github/workflows/*.yml
+#   - pip: dependencies declared in pyproject.toml
+# Updates are grouped so you get one PR per ecosystem per week, not one per package.
+# Security updates (Dependabot alerts) are a separate repository setting; enable
+# them under Settings -> Code security. See docs/maintainers.md.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ["*"]
+    labels: [dependencies, github-actions]
+    commit-message:
+      prefix: "ci"
+
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      # Tooling can be bumped together; runtime deps get their own PR so a
+      # pydantic or xai-sdk change is reviewed on its own.
+      dev-tooling:
+        dependency-type: development
+        patterns: ["*"]
+      runtime:
+        dependency-type: production
+        patterns: ["*"]
+    labels: [dependencies, python]
+    commit-message:
+      prefix: "deps"

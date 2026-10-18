@@ -1,0 +1,148 @@
+# Continuous integration: every push and pull request runs lint, type-check,
+# tests (with coverage), and a packaging check. The final "ci" job is the single
+# status check to require in branch protection; it fails if any job above fails.
+#
+# How this file is read: see docs/maintainers.md ("How the workflows work").
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch: # lets you run it by hand from the Actions tab
+
+# The GITHUB_TOKEN handed to every job gets read-only access. Jobs that need
+# more must ask for it explicitly in their own `permissions:` block.
+permissions:
+  contents: read
+
+# If you push twice to the same PR, cancel the older run instead of queueing.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_DEFAULT: "3.12"
+  FORCE_COLOR: "1"
+
+jobs:
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_DEFAULT }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install
+        run: python -m pip install --upgrade pip && pip install -e ".[dev]"
+      - name: ruff check
+        # `--output-format=github` makes findings show up as annotations on the PR diff.
+        run: ruff check --output-format=github src tests examples
+      - name: ruff format --check
+        run: ruff format --check --diff src tests examples
+
+  typecheck:
+    name: Type-check (mypy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_DEFAULT }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install
+        run: python -m pip install --upgrade pip && pip install -e ".[dev]"
+      - name: mypy
+        # Paths and strictness come from [tool.mypy] in pyproject.toml.
+        run: mypy
+
+  test:
+    name: Test (py${{ matrix.python-version }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false # let every cell finish so one failure does not hide another
+      matrix:
+        os: [ubuntu-latest]
+        python-version: ["3.11", "3.12", "3.13"]
+        include:
+          # One Python on the other two OSes catches path/newline differences
+          # (knowledge loading reads from disk) without tripling the matrix.
+          - os: macos-latest
+            python-version: "3.12"
+          - os: windows-latest
+            python-version: "3.12"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install
+        run: python -m pip install --upgrade pip && pip install -e ".[dev]"
+      - name: pytest with coverage
+        # The minimum coverage (`fail_under`) lives in [tool.coverage.report]
+        # in pyproject.toml so local runs enforce the same number.
+        # Future: to publish coverage to Codecov, add the codecov/codecov-action
+        # step after this one and upload coverage.xml (see docs/maintainers.md).
+        run: pytest --cov --cov-report=term-missing --cov-report=xml
+      - name: Upload coverage report
+        # Keeps the XML as a downloadable artifact on the run page so you can
+        # inspect coverage without any external service.
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == env.PYTHON_DEFAULT
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          retention-days: 14
+
+  build:
+    name: Build package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_DEFAULT }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Build sdist and wheel
+        run: python -m pip install --upgrade pip build twine && python -m build
+      - name: Check metadata renders on PyPI
+        run: twine check --strict dist/*
+      - name: Smoke-test the wheel in a clean environment
+        # Install the built wheel (not the source tree) to prove the package
+        # works as users will receive it.
+        run: |
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/pip install --quiet dist/*.whl
+          /tmp/smoke/bin/loopkit --help
+          /tmp/smoke/bin/python -c "import loopkit; print(loopkit.__version__)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 14
+
+  # Aggregator. Branch protection should require exactly this check, so the
+  # matrix can change without editing repository settings.
+  ci:
+    name: CI passed
+    if: always()
+    needs: [lint, typecheck, test, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail if any job failed or was cancelled
+        run: |
+          echo "lint:      ${{ needs.lint.result }}"
+          echo "typecheck: ${{ needs.typecheck.result }}"
+          echo "test:      ${{ needs.test.result }}"
+          echo "build:     ${{ needs.build.result }}"
+          if [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = "true" ]; then
+            exit 1
+          fi
