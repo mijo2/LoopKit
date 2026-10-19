@@ -1,0 +1,7 @@
+# Controls what goes into the source distribution (sdist) beyond the package
+# itself. Wheels are unaffected. Tests and the example they read are included
+# so that downstream packagers can run `pytest` from the sdist.
+include LICENSE README.md CHANGELOG.md CITATION.cff
+graft tests
+graft examples
+global-exclude __pycache__ *.py[cod] .DS_Store

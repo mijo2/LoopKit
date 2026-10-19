@@ -4,8 +4,7 @@ from loopkit.errors import LoopError
 from loopkit.loop import BOOK_INSTRUCTIONS, BOOK_MAX_OUTPUT_TOKENS, DEFAULT_INSTRUCTIONS, Loop
 from loopkit.prompts import CHECK_ONE_SYSTEM, CHECK_SYSTEM, DRAFT_SYSTEM, WEAK_MATCH
 from loopkit.schemas import Draft
-from tests.fakes import ScriptedModel, accepted, audit, checks
-
+from tests.fakes import ScriptedModel, T, accepted, audit, checks
 
 POLICY = "Refunds are available for 14 days after the charge. Keys are shown once."
 
@@ -33,7 +32,9 @@ def test_passes_on_the_first_check() -> None:
     assert f"1. {DEFAULT_INSTRUCTIONS[0]}" in str(model.calls[0]["user"])
     assert answer.response == "normal"
     assert answer.checks[0].follows_instructions is True
-    assert [item.followed for item in answer.checks[0].instructions] == [True] * len(DEFAULT_INSTRUCTIONS)
+    assert [item.followed for item in answer.checks[0].instructions] == [True] * len(
+        DEFAULT_INSTRUCTIONS
+    )
     assert CHECK_ONE_SYSTEM.splitlines()[0] in str(model.calls[1]["system"])
 
 
@@ -119,7 +120,9 @@ def test_a_missing_instruction_verdict_revises() -> None:
             audit(revise=False),
         ]
     )
-    answer = Loop(knowledge=POLICY, client=model, check_mode="all").ask("What is the refund window?")
+    answer = Loop(knowledge=POLICY, client=model, check_mode="all").ask(
+        "What is the refund window?"
+    )
     assert answer.turns == 2
     assert answer.checks[0].instructions[-1].followed is False
     assert "was not judged" in str(model.calls[2]["user"])
@@ -135,7 +138,9 @@ def test_all_mode_checks_the_whole_list_in_one_call() -> None:
             audit(revise=False),
         ]
     )
-    answer = Loop(knowledge=POLICY, client=model, check_mode="all").ask("What is the refund window?")
+    answer = Loop(knowledge=POLICY, client=model, check_mode="all").ask(
+        "What is the refund window?"
+    )
     assert answer.stopped_reason == "passed"
     assert len(model.calls) == 2
     assert model.calls[1]["schema"].__name__ == "DraftCheck"
@@ -278,11 +283,11 @@ def test_empty_task_and_bad_turns() -> None:
 
 def test_model_failure_names_the_stage() -> None:
     class Boom:
-        def parse(self, **kwargs: object) -> object:
+        def parse(self, *, system_text: str, user_text: str, schema: type[T]) -> T:
             raise RuntimeError("network down")
 
     loop = Loop(knowledge=POLICY, client=Boom())
-    with pytest.raises(LoopError, match="draft \\(turn 1\\).*network down"):
+    with pytest.raises(LoopError, match=r"draft \(turn 1\).*network down"):
         loop.ask("What is the refund window?")
 
 

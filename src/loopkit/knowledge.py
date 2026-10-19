@@ -45,6 +45,7 @@ MAX_FILE_BYTES = 1_000_000
 CHUNK_CHARS = 1400
 CHUNK_OVERLAP = 200
 
+
 @dataclass(frozen=True)
 class Passage:
     """One slice of a source document.

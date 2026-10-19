@@ -1,0 +1,46 @@
+# Local git hooks that run the same checks as CI before a commit is created.
+#   pip install -e ".[dev]"      # installs pre-commit
+#   pre-commit install           # one-time: registers the git hook
+#   pre-commit run --all-files   # run everything by hand
+#
+# Hook versions are pinned. Keep the ruff and mypy revs in step with the
+# ranges in pyproject.toml [project.optional-dependencies].dev so that a
+# commit that passes locally also passes CI. Bump with `pre-commit autoupdate`.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: ["--maxkb=500"]
+      - id: check-merge-conflict
+      - id: detect-private-key
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.0
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v2.4.0
+    hooks:
+      - id: mypy
+        # mypy needs the project's own dependencies to resolve imports.
+        additional_dependencies: ["pydantic>=2", "pytest>=8"]
+        pass_filenames: false # use [tool.mypy] files= from pyproject.toml
+        args: []
+
+  - repo: local
+    hooks:
+      - id: validate-citation
+        name: validate CITATION.cff
+        entry: cffconvert --validate
+        language: python
+        additional_dependencies: ["cffconvert==2.0.0"]
+        files: ^CITATION\.cff$
+        pass_filenames: false

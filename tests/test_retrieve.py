@@ -44,7 +44,9 @@ def test_rag_query_ranks_on_this_machine() -> None:
     hits = query(
         (
             _passage("p1", "harbor lanes and shipping notes"),
-            _passage("p2", "Refunds are available for 14 days after the charge.", heading="Refunds"),
+            _passage(
+                "p2", "Refunds are available for 14 days after the charge.", heading="Refunds"
+            ),
         ),
         "What is the refund window?",
     )

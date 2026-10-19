@@ -8,8 +8,9 @@ from contextlib import contextmanager
 import pytest
 
 from loopkit.loop import Loop
-from loopkit.serve import MAX_BODY_BYTES, PAGE, make_server
-from tests.fakes import ScriptedModel, accepted
+from loopkit.models import Answer
+from loopkit.serve import MAX_BODY_BYTES, PAGE, make_server, server_url
+from tests.fakes import ScriptedModel, T, accepted
 
 
 @contextmanager
@@ -17,9 +18,8 @@ def running(loop: Loop) -> Iterator[str]:
     server = make_server(loop, "127.0.0.1", 0)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    host, port = server.server_address[:2]
     try:
-        yield f"http://{host}:{port}"
+        yield server_url(server)
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -94,7 +94,7 @@ def _post(base: str, payload: bytes) -> tuple[int, dict[str, object]]:
 
 def test_model_failure_reports_the_stage(capsys: pytest.CaptureFixture[str]) -> None:
     class Boom:
-        def parse(self, **kwargs: object) -> object:
+        def parse(self, *, system_text: str, user_text: str, schema: type[T]) -> T:
             raise RuntimeError("network down")
 
     loop = Loop(knowledge="Refunds last 14 days after the charge.", client=Boom(), trace=False)
@@ -105,13 +105,17 @@ def test_model_failure_reports_the_stage(capsys: pytest.CaptureFixture[str]) -> 
     capsys.readouterr()
 
 
-def test_unexpected_error_is_not_leaked_in_the_body(capsys: pytest.CaptureFixture[str]) -> None:
-    loop = Loop(knowledge="Refunds last 14 days after the charge.", client=ScriptedModel([]), trace=False)
+def test_unexpected_error_is_not_leaked_in_the_body(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loop = Loop(
+        knowledge="Refunds last 14 days after the charge.", client=ScriptedModel([]), trace=False
+    )
 
-    def explode(_task: str) -> object:
+    def explode(_task: str) -> Answer:
         raise RuntimeError("boom secret")
 
-    loop.ask = explode  # type: ignore[method-assign]
+    monkeypatch.setattr(loop, "ask", explode)
     with running(loop) as base:
         status, body = _post(base, json.dumps({"task": "What is the refund window?"}).encode())
     assert status == 500

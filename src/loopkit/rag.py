@@ -16,11 +16,58 @@ from dataclasses import dataclass
 from loopkit.knowledge import Passage
 
 _STOP = frozenset(
-    """
-    a an the of to and in on for is it with as at by from or be this that are was
-    were your you we our their its if into over not can how what when where which
-    who whom why does did do than then them these those
-    """.split()
+    [
+        "a",
+        "an",
+        "the",
+        "of",
+        "to",
+        "and",
+        "in",
+        "on",
+        "for",
+        "is",
+        "it",
+        "with",
+        "as",
+        "at",
+        "by",
+        "from",
+        "or",
+        "be",
+        "this",
+        "that",
+        "are",
+        "was",
+        "were",
+        "your",
+        "you",
+        "we",
+        "our",
+        "their",
+        "its",
+        "if",
+        "into",
+        "over",
+        "not",
+        "can",
+        "how",
+        "what",
+        "when",
+        "where",
+        "which",
+        "who",
+        "whom",
+        "why",
+        "does",
+        "did",
+        "do",
+        "than",
+        "then",
+        "them",
+        "these",
+        "those",
+    ]
 )
 _TOKEN = re.compile(r"[a-z0-9]+")
 
@@ -69,7 +116,9 @@ def query(passages: Sequence[Passage], text: str) -> list[RagHit]:
             seen = frequency.get(term, 0)
             if not seen:
                 continue
-            idf = math.log(1 + (count - document_frequency[term] + 0.5) / (document_frequency[term] + 0.5))
+            idf = math.log(
+                1 + (count - document_frequency[term] + 0.5) / (document_frequency[term] + 0.5)
+            )
             denominator = seen + k1 * (1 - b + b * length / average_length)
             score += idf * (seen * (k1 + 1)) / denominator
         hits.append(RagHit(passage, score))

@@ -1,0 +1,44 @@
+name: Feature request
+description: Propose a change to behaviour, the API, the CLI, or the project file.
+title: "[Feature]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        loop-kit is intentionally small (see the **Scope** section of CONTRIBUTING.md).
+        Proposals that fit that scope are very welcome; for larger directions, a Discussion is the better place to start.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe the situation, not the solution yet. What are you doing, and where does loop-kit get in the way?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: What would you like to see? If it touches the Python API, the CLI, or `loopkit.toml`, sketch what the call or config would look like.
+      render: python
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: Including "I can do this today with X, but it is awkward because…".
+
+  - type: dropdown
+    id: willing
+    attributes:
+      label: Would you be willing to implement this?
+      options:
+        - "Yes, with guidance"
+        - "Yes, independently"
+        - "No"
+    validations:
+      required: true

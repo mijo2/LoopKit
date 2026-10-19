@@ -98,9 +98,7 @@ class DraftCheck(BaseModel):
             "passages. False when the draft is acceptable, including an honest refusal."
         )
     )
-    notes: str = Field(
-        description="Concrete edits for the next draft. Empty when revise is false."
-    )
+    notes: str = Field(description="Concrete edits for the next draft. Empty when revise is false.")
     gaps: list[str] = Field(
         description=(
             "Omissions a revision can fix from these passages. Empty when nothing in the "

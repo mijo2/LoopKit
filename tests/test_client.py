@@ -15,16 +15,24 @@ def test_missing_key(monkeypatch: pytest.MonkeyPatch) -> None:
         XAIClient(model="grok-4.7")
 
 
+def test_missing_sdk_names_the_extra(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Simulate `pip install loop-kit` without the [xai] extra.
+    monkeypatch.setitem(sys.modules, "xai_sdk", None)
+    with pytest.raises(LoopError, match=r"loop-kit\[xai\]"):
+        XAIClient(model="grok-4.7", api_key="test-key")
+
+
 def test_parse_uses_grok_and_does_not_store_messages(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: dict[str, object] = {}
+    messages: list[object] = []
 
     class FakeChat:
         def append(self, message: object) -> None:
-            calls.setdefault("messages", []).append(message)  # type: ignore[union-attr]
+            messages.append(message)
 
-        def parse(self, schema: type[object]) -> tuple[object, Draft]:
+        def parse(self, schema: type[Draft]) -> tuple[object, Draft]:
             calls["schema"] = schema
-            return ("response", schema(answer="hello", cited_ids=["p1"]))  # type: ignore[call-arg]
+            return ("response", schema(answer="hello", cited_ids=["p1"]))
 
     class FakeChatAPI:
         def create(self, **kwargs: object) -> FakeChat:
@@ -52,7 +60,10 @@ def test_parse_uses_grok_and_does_not_store_messages(monkeypatch: pytest.MonkeyP
     assert calls["create"] == {"model": "grok-4.7", "store_messages": False}
 
     calls.clear()
-    client = XAIClient(model="grok-4.7", api_key="test-key", max_output_tokens=BOOK_MAX_OUTPUT_TOKENS)
+    messages.clear()
+    client = XAIClient(
+        model="grok-4.7", api_key="test-key", max_output_tokens=BOOK_MAX_OUTPUT_TOKENS
+    )
     client.parse(system_text="rules", user_text="task", schema=Draft)
     assert calls["create"] == {
         "model": "grok-4.7",
@@ -60,4 +71,4 @@ def test_parse_uses_grok_and_does_not_store_messages(monkeypatch: pytest.MonkeyP
         "max_tokens": BOOK_MAX_OUTPUT_TOKENS,
     }
     assert calls["schema"] is Draft
-    assert calls["messages"] == [("system", "rules"), ("user", "task")]
+    assert messages == [("system", "rules"), ("user", "task")]

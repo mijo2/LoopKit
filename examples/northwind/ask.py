@@ -1,8 +1,8 @@
 """Ask the Northwind knowledge base.
 
-    export XAI_API_KEY="your_api_key"  # or OPENAI_API_KEY, or ANTHROPIC_API_KEY
-    python examples/northwind/ask.py
-    python examples/northwind/ask.py How do I rotate an API key?
+export XAI_API_KEY="your_api_key"  # or OPENAI_API_KEY, or ANTHROPIC_API_KEY
+python examples/northwind/ask.py
+python examples/northwind/ask.py How do I rotate an API key?
 """
 
 from __future__ import annotations

@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from typing import Literal
 
 StoppedReason = Literal["passed", "max_turns"]
+"""Why the loop stopped: every check passed, or the turn budget ran out."""
+
 ResponseKind = Literal["normal", "book"]
 LoopMode = Literal["knowledge", "open"]
 
@@ -72,6 +74,8 @@ class Answer:
         return self.text
 
     def to_dict(self) -> dict[str, object]:
+        """A JSON-serialisable view of the answer, as printed by ``loopkit ask --json``."""
+
         return {
             "text": self.text,
             "response": self.response,

@@ -13,7 +13,9 @@ def _project(tmp_path: Path, body: str) -> Path:
     return path
 
 
-def test_load_resolves_knowledge_next_to_the_toml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_load_resolves_knowledge_next_to_the_toml(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     docs = tmp_path / "knowledge"
     docs.mkdir()
     (docs / "a.md").write_text("The launch code is bluebird.\n", encoding="utf-8")
@@ -108,7 +110,9 @@ def test_file_without_knowledge_warns_instead_of_failing(tmp_path: Path, monkeyp
     assert loop.instructions == ("Be brief.",)
 
 
-def test_ask_reads_the_project_when_knowledge_is_omitted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ask_reads_the_project_when_knowledge_is_omitted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     (tmp_path / "notes.md").write_text("Desks ship in two weeks.\n", encoding="utf-8")
     _project(tmp_path, 'knowledge = "notes.md"\n')
     monkeypatch.chdir(tmp_path)

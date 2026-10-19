@@ -14,6 +14,8 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Literal, Protocol, TypeVar, cast
 
+from pydantic import BaseModel
+
 from loopkit.client import DEFAULT_MODELS, make_client
 from loopkit.config import CHECK_MODES, RESPONSES, load_project
 from loopkit.debuglog import block, enable_debug_log, logger, resolve_debug
@@ -54,8 +56,11 @@ BOOK_INSTRUCTIONS = (
     "Answer the task using only the knowledge passages.",
     "Cite supporting passages inline as [p1], [p2], and so on.",
     "If the passages do not contain the answer, say that clearly and do not guess.",
-    "Write a long response with headings. It may be as long as a book when the passages support that. "
-    "Do not add facts that are not in the passages.",
+    (
+        "Write a long response with headings. "
+        "It may be as long as a book when the passages support that. "
+        "Do not add facts that are not in the passages."
+    ),
 )
 # With web search and passages, the passages still come first.
 SEARCH_INSTRUCTIONS = (
@@ -97,7 +102,7 @@ def default_instructions(mode: str, response: str, search: bool = False) -> tupl
         return SEARCH_BOOK_INSTRUCTIONS if book else SEARCH_INSTRUCTIONS
     return BOOK_INSTRUCTIONS if book else DEFAULT_INSTRUCTIONS
 
-T = TypeVar("T")
+T = TypeVar("T", bound=BaseModel)
 
 
 class ModelClient(Protocol):
@@ -123,6 +128,44 @@ class Loop:
     built-in instructions do not ask for passages or citations. ``search``
     turns on the provider's web search for the draft and the accuracy or
     grounding audit; it is available for xAI, OpenAI, and Anthropic.
+
+    Args:
+        knowledge: What to answer from. A directory or file path, a string of
+            text, a ``{name: text}`` mapping, a list of any of those, or a
+            prepared :class:`~loopkit.knowledge.Knowledge`.
+        instructions: Rules the checker enforces on every draft. A string is
+            split into one instruction per non-empty line; a sequence is used
+            item by item. ``None`` selects :data:`DEFAULT_INSTRUCTIONS` (or
+            :data:`BOOK_INSTRUCTIONS` when ``response="book"``).
+        model: Model name. Defaults to ``LOOPKIT_MODEL`` or the provider's
+            entry in :data:`~loopkit.client.DEFAULT_MODELS`.
+        provider: ``"xai"``, ``"openai"``, ``"anthropic"``, or ``"compatible"``.
+            Needed only when more than one API key is set; otherwise inferred
+            from the environment (or ``LOOPKIT_PROVIDER``).
+        base_url: An OpenAI-compatible server to call instead of a hosted
+            provider (or ``LOOPKIT_BASE_URL``). Implies ``provider="compatible"``
+            unless a provider is set explicitly.
+        max_turns: Draft/check/revise rounds before the loop gives up and
+            returns the latest draft with ``stopped_reason="max_turns"``.
+        top_k: Passages kept by retrieval when the knowledge base exceeds
+            ``context_budget``.
+        context_budget: Character budget for passages sent to the model. A
+            knowledge base that fits is sent whole, skipping retrieval;
+            otherwise retrieval keeps the best matches up to this budget.
+        api_key: Overrides the provider's environment variable. Never read
+            from ``loopkit.toml``.
+        client: Any object with a ``parse(system_text=, user_text=, schema=)``
+            method (see :class:`ModelClient`). Replaces the built-in provider
+            clients; tests use this to script the model.
+        trace: Print each loop step to stderr. ``None`` reads ``LOOPKIT_TRACE``.
+        check_mode: ``"each"`` judges one instruction per model call then runs
+            a grounding check; ``"all"`` scores every instruction in one call.
+        response: ``"normal"`` for a concise answer, ``"book"`` for a long-form
+            answer with headings and a raised output-token cap.
+
+    Raises:
+        LoopError: On an unusable knowledge base, an invalid option, or a
+            missing API key.
     """
 
     def __init__(
@@ -196,7 +239,7 @@ class Loop:
             self._client = built
 
     @classmethod
-    def load(cls, path: str | Path | None = None, **overrides: object) -> Loop:
+    def load(cls, path: str | Path | None = None, /, **overrides: object) -> Loop:
         """Build a loop from ``loopkit.toml``."""
 
         project = load_project(path, missing_ok=True)
@@ -233,7 +276,17 @@ class Loop:
         )
 
     def ask(self, task: str) -> Answer:
-        """Answer one task from the loaded knowledge base."""
+        """Answer one task from the loaded knowledge base.
+
+        Runs retrieval, then up to ``max_turns`` rounds of draft, check, and
+        revise. Returns the latest draft even when the turn budget runs out;
+        inspect :attr:`Answer.stopped_reason` and :attr:`Answer.checks` to see
+        whether it passed.
+
+        Raises:
+            LoopError: When ``task`` is empty, or when a model call fails
+                (the provider error is chained as ``__cause__``).
+        """
 
         question = task.strip()
         if not question:
@@ -547,7 +600,13 @@ def ask(
     instructions: str | Sequence[str] | None = None,
     **kwargs: object,
 ) -> Answer:
-    """Answer one task. With no knowledge argument, read ``loopkit.toml``."""
+    """Answer one task with a throwaway :class:`Loop`.
+
+    With no ``knowledge`` argument the project file ``loopkit.toml`` is read.
+    Extra keyword arguments are passed to :class:`Loop`. For more than one
+    question, build a :class:`Loop` once and call :meth:`Loop.ask` instead, so
+    documents are read only once.
+    """
 
     if knowledge is None:
         if instructions is not None:
@@ -571,7 +630,7 @@ def normalize_instructions(value: str | Sequence[str] | None) -> tuple[str, ...]
         if not lines:
             raise LoopError("Instructions must contain at least one non-empty line.")
         return tuple(lines)
-    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+    if isinstance(value, Sequence):
         items: list[str] = []
         for piece in value:
             if not isinstance(piece, str):
@@ -705,17 +764,17 @@ def _judge_instructions(
     judged: list[InstructionCheck] = []
     problems: list[str] = []
     for number, instruction in enumerate(instructions, start=1):
-        verdict = by_number.get(number)
-        if verdict is not None and verdict.followed:
+        found = by_number.get(number)
+        if found is not None and found.followed:
             judged.append(
                 InstructionCheck(number=number, instruction=instruction, followed=True, note="")
             )
             continue
-        if verdict is None:
+        if found is None:
             note = "The check did not judge this instruction."
             problems.append(f"Instruction {number} was not judged: {instruction}")
         else:
-            note = verdict.note.strip()
+            note = found.note.strip()
             if note:
                 problems.append(f"Instruction {number} was not followed: {instruction}\n{note}")
             else:
@@ -778,7 +837,9 @@ def _finish(
         if passage is None:
             continue
         citations.append(
-            Citation(id=passage.id, source=passage.source, heading=passage.heading, text=passage.text)
+            Citation(
+                id=passage.id, source=passage.source, heading=passage.heading, text=passage.text
+            )
         )
     return Answer(
         text=draft.answer.strip(),

@@ -3,17 +3,32 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import TypedDict, TypeVar
+
+from pydantic import BaseModel
 
 from loopkit.loop import DEFAULT_INSTRUCTIONS
 from loopkit.schemas import Draft, DraftCheck, GroundingCheck, InstructionVerdict, OneCheck
 
+T = TypeVar("T", bound=BaseModel)
+
+
+class Call(TypedDict):
+    """One recorded model call: the two prompt halves and the schema that was requested."""
+
+    system: str
+    user: str
+    schema: type[BaseModel]
+
 
 class ScriptedModel:
-    def __init__(self, replies: list[object]) -> None:
-        self._replies = list(replies)
-        self.calls: list[dict[str, object]] = []
+    """Stands in for a provider client. Satisfies ``loopkit.loop.ModelClient``."""
 
-    def parse(self, *, system_text: str, user_text: str, schema: type[object]) -> object:
+    def __init__(self, replies: list[BaseModel]) -> None:
+        self._replies = list(replies)
+        self.calls: list[Call] = []
+
+    def parse(self, *, system_text: str, user_text: str, schema: type[T]) -> T:
         self.calls.append({"system": system_text, "user": user_text, "schema": schema})
         if not self._replies:
             raise AssertionError("ScriptedModel ran out of replies")
@@ -64,7 +79,7 @@ def checks(
     gaps: list[str] | None = None,
     failed: Sequence[int] = (),
     instruction_count: int | None = None,
-) -> list[object]:
+) -> list[BaseModel]:
     """One turn of per-instruction checks plus the grounding check."""
 
     total = len(DEFAULT_INSTRUCTIONS) if instruction_count is None else instruction_count
@@ -72,17 +87,15 @@ def checks(
     if not follows:
         failed_numbers.add(1)
     failure_note = notes if not follows or failed else ""
-    replies: list[object] = []
+    replies: list[BaseModel] = []
     for number in range(1, total + 1):
         missed = number in failed_numbers
         replies.append(OneCheck(followed=not missed, note=failure_note if missed else ""))
-    replies.append(
-        GroundingCheck(grounded=grounded, revise=revise, notes=notes, gaps=gaps or [])
-    )
+    replies.append(GroundingCheck(grounded=grounded, revise=revise, notes=notes, gaps=gaps or []))
     return replies
 
 
-def accepted(answer: str, *ids: str, instructions: int | None = None) -> list[object]:
+def accepted(answer: str, *ids: str, instructions: int | None = None) -> list[BaseModel]:
     return [
         Draft(answer=answer, cited_ids=list(ids)),
         *checks(instruction_count=instructions),

@@ -1,0 +1,11 @@
+# Code owners are automatically requested for review on pull requests that
+# touch matching paths. Later lines override earlier ones.
+# Docs: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default: the maintainer reviews everything.
+*                       @OWNER
+
+# Anything that changes how the project is built, tested, or released.
+/.github/               @OWNER
+/pyproject.toml         @OWNER
+/SECURITY.md            @OWNER

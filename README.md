@@ -1,4 +1,19 @@
-# loop-kit
+<h1 align="center">loop-kit</h1>
+
+<p align="center">
+  Answers from your documents, checked against your instructions.<br>
+  A draft, check, and revise loop that code controls, not the model.
+</p>
+
+<p align="center">
+  <a href="https://github.com/OWNER/loop-kit/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/OWNER/loop-kit/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://pypi.org/project/loop-kit/"><img alt="PyPI" src="https://img.shields.io/pypi/v/loop-kit"></a>
+  <img alt="Python 3.11 | 3.12 | 3.13" src="https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue">
+  <img alt="Typed: mypy --strict" src="https://img.shields.io/badge/typed-mypy%20--strict-blue">
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green"></a>
+</p>
+
+---
 
 loop-kit answers from your documents. You give it a knowledge base and, when you want to, instructions. It retrieves the relevant passages and runs a draft, check, and revise loop until the answer follows those instructions and stays inside the documents.
 
@@ -11,30 +26,90 @@ loop = Loop(knowledge="knowledge")
 print(loop.ask("What is the refund window?"))
 ```
 
-Set one API key in the environment. If only one of these is set, that provider is used:
+## Contents
 
-| Provider | Environment variable | Default model |
-| --- | --- | --- |
-| xAI | `XAI_API_KEY` | `grok-4.7` |
-| OpenAI | `OPENAI_API_KEY` | `gpt-6.1-sol` |
-| Anthropic | `ANTHROPIC_API_KEY` | `claude-sonnet-5-5` |
+- [Why loop-kit](#why-loop-kit)
+- [Install](#install)
+- [Quickstart](#quickstart)
+- [The loop](#the-loop)
+- [Configuration](#configuration)
+  - [Providers](#providers)
+  - [Defaults](#defaults)
+  - [Instructions](#instructions)
+  - [Knowledge](#knowledge)
+  - [Project file](#project-file)
+- [Use the answer](#use-the-answer)
+- [Command line](#command-line)
+- [What the model is allowed to do](#what-the-model-is-allowed-to-do)
+- [Example](#example)
+- [Status](#status)
+- [Develop](#develop)
+- [Contributing](#contributing)
+- [Citation](#citation)
+- [License](#license)
+
+## Why loop-kit
+
+You point a model at your docs and it answers beautifully, and some of it is made up. You add "only answer from the documents" and "keep it under 80 words" to the prompt, and it follows them most of the time, which is the same as not following them. So you reach for the usual stack: an embedding model, a vector database, an agent framework, and a growing prompt nobody wants to touch. Weeks later the answers are still confident, still occasionally wrong, and now you cannot tell why.
+
+loop-kit takes the opposite bet. Keep the model on a short leash and let code do the looping. The model drafts an answer and cites the passages it used. Then it is checked, one instruction at a time, so a miss cannot hide in a long list, and once more for grounding: did it stay inside the passages, are the citations real. If anything fails, the next draft is told exactly what to fix. If everything passes, you get the answer and the audit trail that proves it. Three turns, then it stops. There is no vector database to run, no embedding model to pick, no graph to debug. There is a folder of documents, a list of rules, and a loop you can read in one file.
+
+## Install
 
 ```bash
-pip install -e .
+pip install loop-kit            # OpenAI, Anthropic, and OpenAI-compatible servers
+pip install "loop-kit[xai]"     # adds the xAI SDK for Grok
+```
+
+Requires Python 3.11 or newer. The PyPI project named `loopkit` (no hyphen) is unrelated control-systems software. This project is `loop-kit`.
+
+To install from a checkout instead: `pip install -e .` (or `-e ".[xai]"`).
+
+## Quickstart
+
+Set one API key in the environment. If only one of these is set, that provider is used:
+
+```bash
 export XAI_API_KEY="your_api_key"
 # or: export OPENAI_API_KEY="your_api_key"
 # or: export ANTHROPIC_API_KEY="your_api_key"
 ```
 
-If more than one key is set, pass `provider` or set `LOOPKIT_PROVIDER` to `xai`, `openai`, or `anthropic`. Another OpenAI-compatible server needs `base_url` and `model`:
+Point a `Loop` at a folder of documents and ask:
 
 ```python
-Loop(knowledge="knowledge", base_url="http://localhost:11434/v1", model="llama3.1")
+from loopkit import Loop
+
+loop = Loop(
+    knowledge="docs/",
+    instructions=[
+        "You are the Sample Co support assistant.",
+        "Answer in under 80 words.",
+    ],
+)
+answer = loop.ask("What is the refund window?")
+print(answer)                 # the text
+print(answer.citations)       # the passages it used
+print(answer.stopped_reason)  # "passed" or "max_turns"
+```
+
+Or try it from the terminal without writing a script:
+
+```bash
+loopkit init                              # writes loopkit.toml and knowledge/start.md
+loopkit ask "What is the refund window?"  # prints each loop step to stderr, the answer to stdout
+```
+
+From a checkout, `make` does the setup for you. The first call creates `.venv/` and installs everything; later calls reuse it:
+
+```bash
+cp .env.example .env                      # put one API key in it; .env is gitignored
+make init                                 # or: make example
+make ask Q="What is the refund window?"
+make serve                                # http://127.0.0.1:8080
 ```
 
 Keys are read from the environment, or from `api_key=`. Do not commit them.
-
-Install from this repository. The PyPI project named `loopkit` (no hyphen) is unrelated control-systems software. This project is `loop-kit`. xAI calls go through the [xAI SDK](https://docs.x.ai/developers/quickstart). OpenAI uses the Responses API. Anthropic uses the Messages API.
 
 ## The loop
 
@@ -50,9 +125,60 @@ flowchart TD
 
 The optimize step is one call that writes who the model should be for this task (see [Auto-optimize](#auto-optimize)); that role prefixes every call after it. The drafter writes an answer and cites passage ids. By default the checker then judges one instruction per call, so a long list is not scored all at once, and finishes with one grounding check. The loop stops when every instruction holds, the draft stays inside the passages, citations are real ids, and the checker does not ask for another pass. Otherwise it revises, up to 3 turns, and the next draft is told which instructions failed. `check_mode="all"` is the two-call turn: one draft, then one check that scores every instruction together.
 
-You bring documents and instructions. Chunking, retrieval, prompts, the checker, citation checks, and the stop condition ship in this repo. The loop itself is `src/loopkit/loop.py`.
+This is what `loopkit ask` prints while it runs (stderr), for the [example](#example) knowledge base with five instructions, when the first draft misses one:
 
-## Defaults
+```text
+loopkit: 4 passages loaded, 4 sent to the model
+loopkit: turn 1: draft
+loopkit: turn 1: check instruction 1
+loopkit: turn 1: check instruction 2
+loopkit: turn 1: check instruction 3
+loopkit: turn 1: check instruction 4
+loopkit: turn 1: check instruction 5
+loopkit: turn 1: check grounding
+loopkit: instructions not followed: 2
+loopkit: revise
+loopkit: turn 2: draft
+loopkit: turn 2: check instruction 1
+loopkit: turn 2: check instruction 2
+loopkit: turn 2: check instruction 3
+loopkit: turn 2: check instruction 4
+loopkit: turn 2: check instruction 5
+loopkit: turn 2: check grounding
+loopkit: stop: passed
+Yes. Northwind refunds a subscription cancelled within 14 days of the charge, so a charge from 10 days ago qualifies. The refund returns to the original payment method within 5 business days. [p1]
+```
+
+You bring documents and instructions. Chunking, retrieval, prompts, the checker, citation checks, and the stop condition ship in this repo. The loop itself is [`src/loopkit/loop.py`](src/loopkit/loop.py).
+
+## Configuration
+
+### Providers
+
+| Provider | Environment variable | Default model | Transport |
+| --- | --- | --- | --- |
+| xAI | `XAI_API_KEY` | `grok-4.7` | [xAI SDK](https://docs.x.ai/developers/quickstart), via the `xai` extra |
+| OpenAI | `OPENAI_API_KEY` | `gpt-6.1-sol` | Responses API, standard library only |
+| Anthropic | `ANTHROPIC_API_KEY` | `claude-sonnet-5-5` | Messages API, standard library only |
+| OpenAI-compatible | `LOOPKIT_API_KEY`, or `OPENAI_API_KEY`; none for a local URL | none; pass `model` | Chat completions, standard library only |
+
+If more than one key is set, pass `provider` or set `LOOPKIT_PROVIDER` to `xai`, `openai`, or `anthropic`. Another OpenAI-compatible server needs `base_url` and `model`:
+
+```python
+Loop(knowledge="knowledge", base_url="http://localhost:11434/v1", model="llama3.1")
+```
+
+Environment variables, all optional:
+
+| Variable | Effect |
+| --- | --- |
+| `LOOPKIT_PROVIDER` | Chooses the provider when more than one key is set |
+| `LOOPKIT_MODEL` | Overrides the model without code changes |
+| `LOOPKIT_BASE_URL` | Same as `base_url=`; implies the OpenAI-compatible provider |
+| `LOOPKIT_API_KEY` | Key for an OpenAI-compatible server. Falls back to `OPENAI_API_KEY`; `localhost` URLs need neither |
+| `LOOPKIT_TRACE` | `1` prints each loop step to stderr (`loopkit ask` does this by default) |
+
+### Defaults
 
 | | |
 | --- | --- |
@@ -67,9 +193,7 @@ You bring documents and instructions. Chunking, retrieval, prompts, the checker,
 | Auto-optimize | On. One call before the loop writes a role for the task that prefixes every draft and check. `auto_optimize=False` skips it |
 | Stored prompts | Off for xAI and OpenAI. The request is still sent to the provider you configured |
 
-No vector database, no embedding model, and no agent graph.
-
-## Instructions
+### Instructions
 
 Instructions are a list. The checker judges each one on its own. The loop revises until every item holds, or the turn budget runs out. A miss is named in the notes for the next draft.
 
@@ -193,23 +317,9 @@ Text files: `.md`, `.markdown`, `.txt`, `.rst`, `.json`, `.yaml`, `.yml`, `.toml
 
 Markdown headings become passage headings. Text inside fenced code blocks stays in the passage, including comment lines that start with `#`.
 
-## Try a loop
+Documents are read when the `Loop` is built, not on every question. Build it once and call `ask` for each task.
 
-`loopkit ask` and `loopkit serve` call the same `Loop` you use in code. They are for trying a knowledge base, not a second product. In an application, import `Loop` and call `ask`.
-
-```bash
-loopkit serve
-```
-
-Open http://127.0.0.1:8080. The page posts to `POST /ask` with `{"task": "..."}`. `GET /health` returns `{"ok": true}`. The process binds to `127.0.0.1` and has no authentication. Keep it off public networks.
-
-## What the model is allowed to do
-
-Passages are evidence. A document that says to ignore your instructions is not followed. The end user's task does not rewrite your instructions. A draft that cites a passage id the loop did not provide cannot pass the check.
-
-Point loop-kit at documents you are willing to send to the API.
-
-## Project file
+### Project file
 
 `loopkit.toml` is the settings for one knowledge base, kept out of code: where the documents are, the instructions, and the provider and loop options. It is read when you build a `Loop` without `knowledge=` (`Loop.load()`), call `loopkit.ask(task)` without knowledge, or run `loopkit ask` without `--knowledge`. It is optional: every setting can be passed in code or on the command line instead.
 
@@ -234,7 +344,39 @@ knowledge = "knowledge"
 # auto_optimize = false
 ```
 
-Paths in the file are relative to the file. Passing `knowledge=` to `Loop` skips the file. The API key is never read from this file.
+Paths in the file are relative to the file. `Loop.load()` reads it; passing `knowledge=` to `Loop` skips the file. The API key is never read from this file, so it is safe to commit.
+
+## Use the answer
+
+```python
+answer = loop.ask("What is the refund window?")
+answer.text
+answer.citations   # passages the draft cited
+answer.response    # "normal" or "book"
+answer.checks      # one auditor result per turn, with a verdict for each instruction
+answer.turns
+answer.stopped_reason  # "passed" or "max_turns"
+answer.to_dict()   # JSON-ready, the same shape `loopkit ask --json` prints
+```
+
+`str(answer)` is the text.
+
+`stopped_reason` is `"max_turns"` when the last check still wanted a revision. You still get the latest draft, and `answer.checks` says why it did not pass.
+
+## Command line
+
+`loopkit ask` and `loopkit serve` call the same `Loop` you use in code. They are for trying a knowledge base, not a second product. In an application, import `Loop` and call `ask`.
+
+| Command | What it does |
+| --- | --- |
+| `loopkit init` | Writes `loopkit.toml` and `knowledge/start.md` in the current directory |
+| `loopkit ask "question"` | Answers from the project file. `--quiet` prints the answer only; `--json` prints the answer object; `-k/--knowledge`, `-i/--instructions` (repeatable), `--instructions-file`, `--model`, `--provider`, `--base-url`, `--max-turns`, `--check-mode`, `--response` override the file |
+| `loopkit serve` | A local page that posts to `POST /ask` with `{"task": "..."}`. `GET /health` returns `{"ok": true}`. `--host`, `--port`, `--trace` |
+| `loopkit --version` | Prints the installed version |
+
+`loopkit serve` opens on http://127.0.0.1:8080. The process binds to `127.0.0.1` and has no authentication. Keep it off public networks.
+
+## What the model is allowed to do
 
 Set `LOOPKIT_TRACE=1` to print loop steps. `LOOPKIT_MODEL` changes the model without code changes. `LOOPKIT_PROVIDER` chooses a provider when more than one key is set. `LOOPKIT_BASE_URL` sets the server for the `compatible` provider.
 
@@ -288,7 +430,7 @@ A call that fails with HTTP 429, 529, 408, or a 5xx, or whose connection drops m
 
 ## Example
 
-`examples/northwind` is a small support desk: billing and account notes, plus instructions.
+[`examples/northwind`](examples/northwind) is a small support desk: billing and account notes, plus instructions.
 
 ```bash
 export XAI_API_KEY="your_api_key"  # or OPENAI_API_KEY, or ANTHROPIC_API_KEY
@@ -296,15 +438,35 @@ python examples/northwind/ask.py
 python examples/northwind/ask.py How do I rotate an API key?
 ```
 
+## Status
+
+loop-kit is pre-1.0 (`0.x`). The public API is what `loopkit.__all__` exports. Minor releases may change it; every change is listed in [CHANGELOG.md](CHANGELOG.md) with a note when it breaks something. Once the API has settled, `1.0` will freeze it under semantic versioning.
+
+Out of scope by design: a vector database or embedding model, an agent graph, and a hosted service. If you need those, loop-kit is probably the wrong tool; if you think one of them belongs here, open a discussion first.
+
 ## Develop
 
 ```bash
-pip install -e ".[dev]"
-pytest
+git clone https://github.com/OWNER/loop-kit.git
+cd loop-kit
+make check          # creates .venv, installs, then runs ruff, mypy, and pytest
+make help           # every target: ask, serve, example, fmt, test, cov, build, ...
 ```
 
-Tests use a scripted model. They do not call the API.
+Without `make`: `pip install -e ".[dev]"`, `pre-commit install`, `pytest`.
+
+Tests use a scripted model. They do not call the API. `ruff`, `mypy --strict`, and `pytest` run on every pull request for Python 3.11 to 3.13 on Linux, macOS, and Windows.
+
+## Contributing
+
+Bug reports, fixes, providers, and documentation are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) first; it covers the checks, the test rules, and what is in scope. Questions go to [Discussions](https://github.com/OWNER/loop-kit/discussions). Security reports go through [SECURITY.md](SECURITY.md), not the issue tracker.
+
+This project follows the [Contributor Covenant](CODE_OF_CONDUCT.md).
+
+## Citation
+
+If loop-kit is useful in your research, cite it with the metadata in [`CITATION.cff`](CITATION.cff), or use the "Cite this repository" button on GitHub.
 
 ## License
 
-MIT.
+[MIT](LICENSE).

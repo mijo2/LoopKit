@@ -4,6 +4,7 @@ import io
 import json
 import urllib.request
 from pathlib import Path
+from typing import Any, Self
 
 import pytest
 
@@ -37,14 +38,16 @@ class _Body:
     def read(self) -> bytes:
         return self._raw
 
-    def __enter__(self) -> _Body:
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, *args: object) -> bool:
-        return False
+    def __exit__(self, *args: object) -> None:
+        return None
 
 
-def _install(monkeypatch: pytest.MonkeyPatch, payload: dict[str, object]) -> list[urllib.request.Request]:
+def _install(
+    monkeypatch: pytest.MonkeyPatch, payload: dict[str, object]
+) -> list[urllib.request.Request]:
     seen: list[urllib.request.Request] = []
 
     def fake_urlopen(request: urllib.request.Request, timeout: float | None = None) -> _Body:
@@ -55,8 +58,8 @@ def _install(monkeypatch: pytest.MonkeyPatch, payload: dict[str, object]) -> lis
     return seen
 
 
-def _request_json(request: urllib.request.Request) -> dict[str, object]:
-    assert request.data is not None
+def _request_json(request: urllib.request.Request) -> dict[str, Any]:
+    assert isinstance(request.data, bytes)
     body = json.loads(request.data.decode())
     assert isinstance(body, dict)
     return body
@@ -116,7 +119,9 @@ def test_only_xai_key_uses_the_xai_client(monkeypatch: pytest.MonkeyPatch) -> No
             max_output_tokens: int | None = None,
             search: bool = False,
         ) -> None:
-            created.update(model=model, api_key=api_key, timeout=timeout, max_output_tokens=max_output_tokens, search=search)
+            created.update(
+                model=model, api_key=api_key, timeout=timeout, max_output_tokens=max_output_tokens, search=search
+            )
             self.model = model
 
     monkeypatch.setattr("loopkit.client.XAIClient", Fake)
@@ -162,7 +167,15 @@ def test_local_server_needs_no_real_key(monkeypatch: pytest.MonkeyPatch) -> None
     _clear(monkeypatch)
     seen = _install(
         monkeypatch,
-        {"choices": [{"message": {"content": Draft(answer="Local answer", cited_ids=[]).model_dump_json()}}]},
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": Draft(answer="Local answer", cited_ids=[]).model_dump_json()
+                    }
+                }
+            ]
+        },
     )
     loop = Loop(knowledge=POLICY, base_url="http://127.0.0.1:11434/v1", model="llama3.1")
     parsed = loop._client.parse(system_text="rules", user_text="task", schema=Draft)
@@ -184,7 +197,14 @@ def test_openai_responses_call_does_not_store_the_prompt(monkeypatch: pytest.Mon
     draft = Draft(answer="Fourteen days.", cited_ids=["p1"]).model_dump_json()
     seen = _install(
         monkeypatch,
-        {"output": [{"type": "message", "content": [{"type": "output_text", "text": f"```json\n{draft}\n```"}]}]},
+        {
+            "output": [
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": f"```json\n{draft}\n```"}],
+                }
+            ]
+        },
     )
     loop = Loop(knowledge=POLICY)
     parsed = loop._client.parse(system_text="rules", user_text="task", schema=Draft)
@@ -282,7 +302,9 @@ def test_toml_provider_is_passed_through(tmp_path: Path, monkeypatch: pytest.Mon
     assert loop.ask("When do desks ship?").text == "Two weeks. [p1]"
 
 
-def test_cli_provider_flag(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+def test_cli_provider_flag(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     from loopkit.cli import main
 
     _clear(monkeypatch)

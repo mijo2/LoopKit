@@ -20,7 +20,7 @@ from pydantic import BaseModel, ValidationError
 from loopkit.errors import LoopError
 from loopkit.retry import RETRY_STATUSES, Transient, parse_retry_after, retry_call
 
-T = TypeVar("T")
+T = TypeVar("T", bound=BaseModel)
 
 # Network failures worth one more try. A refused connection is not one of
 # them: the server is not there, and waiting does not start it.
@@ -344,7 +344,9 @@ def _anthropic_url(base_url: str) -> str:
 
 def _schema_name(schema: type[object]) -> str:
     name = schema.__name__
-    cleaned = "".join(character if character.isalnum() or character in {"_", "-"} else "_" for character in name)
+    cleaned = "".join(
+        character if character.isalnum() or character in {"_", "-"} else "_" for character in name
+    )
     return (cleaned or "Result")[:64]
 
 
@@ -402,7 +404,11 @@ def _chat_text(payload: dict[str, object]) -> list[str]:
         raise LoopError("The model returned no text.")
     content = message.get("content")
     if isinstance(content, list):
-        parts = [part.get("text", "") for part in content if isinstance(part, dict) and isinstance(part.get("text"), str)]
+        parts = [
+            part.get("text", "")
+            for part in content
+            if isinstance(part, dict) and isinstance(part.get("text"), str)
+        ]
         content = "".join(parts)
     if not isinstance(content, str) or not content.strip():
         raise LoopError("The model returned no text.")
@@ -421,13 +427,13 @@ def _responses_text(payload: dict[str, object]) -> list[str]:
             content = item.get("content")
             if not isinstance(content, list):
                 continue
-            text = "".join(
-                block["text"]
-                for block in content
-                if isinstance(block, dict) and block.get("type") == "output_text" and isinstance(block.get("text"), str)
-            )
-            if text:
-                parts.append(text)
+            for block in content:
+                if (
+                    isinstance(block, dict)
+                    and block.get("type") == "output_text"
+                    and isinstance(block.get("text"), str)
+                ):
+                    parts.append(block["text"])
     if not parts:
         raise LoopError(_no_text_reason(payload))
     return parts
@@ -440,7 +446,11 @@ def _anthropic_text(payload: dict[str, object]) -> list[str]:
     parts: list[str] = []
     if isinstance(content, list):
         for block in content:
-            if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str):
+            if (
+                isinstance(block, dict)
+                and block.get("type") == "text"
+                and isinstance(block.get("text"), str)
+            ):
                 parts.append(block["text"])
     if not parts:
         raise LoopError(_no_text_reason(payload))

@@ -10,7 +10,13 @@ import os
 from dataclasses import dataclass
 
 from loopkit.errors import LoopError
-from loopkit.httpapi import AnthropicClient, OpenAIClient, OpenAICompatibleClient, is_local_base_url
+from loopkit.httpapi import (
+    AnthropicClient,
+    OpenAIClient,
+    OpenAICompatibleClient,
+    T,
+    is_local_base_url,
+)
 from loopkit.retry import Transient, retry_call
 
 # gRPC status names the xAI SDK raises when the service is busy or broke
@@ -82,7 +88,13 @@ class XAIClient:
         api_key = api_key.strip()
         if not api_key:
             raise LoopError(_missing_key("xai"))
-        from xai_sdk import Client
+        try:
+            from xai_sdk import Client
+        except ImportError as exc:
+            raise LoopError(
+                "The xAI provider needs the xAI SDK, which is an optional extra. "
+                'Install it with: pip install "loop-kit[xai]"'
+            ) from exc
 
         self.model = model
         self._max_output_tokens = max_output_tokens
@@ -215,7 +227,11 @@ def resolve_provider(provider: str | None, *, base_url: str | None = None) -> Pr
     if not name and url:
         name = "compatible"
     if not name:
-        found = [item for item in ("xai", "openai", "anthropic") if os.environ.get(_KEY_ENV[item], "").strip()]
+        found = [
+            item
+            for item in ("xai", "openai", "anthropic")
+            if os.environ.get(_KEY_ENV[item], "").strip()
+        ]
         if len(found) == 1:
             name = found[0]
         elif not found:
@@ -230,7 +246,9 @@ def resolve_provider(provider: str | None, *, base_url: str | None = None) -> Pr
             "The xAI provider uses the xAI SDK. For a custom base URL, set provider to 'compatible'."
         )
     if name == "compatible" and not url:
-        raise LoopError("provider 'compatible' needs a base_url, for example http://localhost:11434/v1.")
+        raise LoopError(
+            "provider 'compatible' needs a base_url, for example http://localhost:11434/v1."
+        )
     return ProviderChoice(
         name=name,
         default_model=DEFAULT_MODELS.get(name, ""),

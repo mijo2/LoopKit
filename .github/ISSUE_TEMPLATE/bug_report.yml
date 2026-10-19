@@ -1,0 +1,79 @@
+name: Bug report
+description: Something does not work the way the README says it should.
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. A minimal reproduction is the single most useful thing you can give us.
+        Please remove API keys and any private document text before posting.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+      placeholder: |
+        I called `Loop(knowledge="docs").ask("...")` and expected ..., but got ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: |
+        The smallest script, command, or `loopkit.toml` that shows the problem.
+        If a real model is involved, the output of `LOOPKIT_TRACE=1` (with secrets removed) helps a lot.
+      render: python
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Error message or trace output
+      description: Paste the full traceback or the `loopkit:` trace lines. This is rendered as code automatically.
+      render: shell
+
+  - type: input
+    id: version
+    attributes:
+      label: loop-kit version
+      description: "`pip show loop-kit` or `loopkit --version`. Say `main` plus the commit if you installed from git."
+      placeholder: "0.1.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Provider
+      options:
+        - xAI (Grok)
+        - OpenAI
+        - Anthropic
+        - OpenAI-compatible server (base_url)
+        - Custom client / scripted model
+        - Not provider-related
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Python version and OS
+      placeholder: "Python 3.12.3, Ubuntu 24.04"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: I removed API keys and private document contents from everything above.
+          required: true

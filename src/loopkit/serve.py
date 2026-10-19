@@ -188,7 +188,10 @@ class _Handler(BaseHTTPRequestHandler):
         except LoopError as exc:
             self._send(400, {"error": str(exc)})
             return
-        except Exception:
+        except Exception:  # noqa: BLE001 - a request handler must never take the server down
+            # Loop already wraps model failures in LoopError (handled above). Anything else
+            # reaching here is a bug; log the traceback and return a generic 500 rather than
+            # leaking internals to the client or killing the serving thread.
             traceback.print_exc()
             self._send(500, {"error": "The model call failed."})
             return
@@ -220,10 +223,17 @@ def make_server(loop: Loop, host: str, port: int) -> HTTPServer:
         raise LoopError(f"Could not listen on {host}:{port}. {exc}") from exc
 
 
+def server_url(server: HTTPServer) -> str:
+    """The ``http://host:port`` the server is actually bound to (port 0 picks a free one)."""
+
+    bound_host, bound_port = server.server_address[:2]
+    host_text = bound_host.decode() if isinstance(bound_host, bytes) else str(bound_host)
+    return f"http://{host_text}:{bound_port}"
+
+
 def serve(loop: Loop, host: str = "127.0.0.1", port: int = 8080) -> None:
     server = make_server(loop, host, port)
-    bound_host, bound_port = server.server_address[:2]
-    print(f"loopkit listening on http://{bound_host}:{bound_port}", file=sys.stderr)
+    print(f"loopkit listening on {server_url(server)}", file=sys.stderr)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -1,0 +1,11 @@
+# Controls the "New issue" chooser. Blank issues are off so that every issue
+# arrives with the fields the templates ask for; questions and security reports
+# are routed elsewhere.
+blank_issues_enabled: false
+contact_links:
+  - name: Question or usage help
+    url: https://github.com/OWNER/loop-kit/discussions/categories/q-a
+    about: 'For "how do I…?" and "does loop-kit fit…?" — ask in Discussions, not the issue tracker.'
+  - name: Security vulnerability
+    url: https://github.com/OWNER/loop-kit/security/advisories/new
+    about: Report privately. Please do not open a public issue for security problems.

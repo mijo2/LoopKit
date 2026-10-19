@@ -221,7 +221,9 @@ def _with_rule(system: str, rule: str) -> str:
 def render_instructions(instructions: Sequence[str]) -> str:
     """Number each instruction so the drafter and the checker share one list."""
 
-    return "\n".join(f"{number}. {instruction}" for number, instruction in enumerate(instructions, start=1))
+    return "\n".join(
+        f"{number}. {instruction}" for number, instruction in enumerate(instructions, start=1)
+    )
 
 
 def citation_ids(draft: Draft) -> list[str]:

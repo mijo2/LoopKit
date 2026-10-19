@@ -5,11 +5,14 @@ from pathlib import Path
 import pytest
 
 from loopkit.cli import main
+from loopkit.loop import Loop
 from loopkit.schemas import Draft
 from tests.fakes import ScriptedModel, accepted, checks
 
 
-def test_init_then_ask(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+def test_init_then_ask(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     monkeypatch.chdir(tmp_path)
     assert main(["init"]) == 0
     model = ScriptedModel(accepted("Refunds within 30 days. [p1]", "p1"))
@@ -22,7 +25,9 @@ def test_init_then_ask(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: 
     assert main(["init"]) == 0
     again = capsys.readouterr()
     assert "already exists" in again.err
-    assert (tmp_path / "loopkit.toml").read_text(encoding="utf-8").count('knowledge = "knowledge"') == 1
+    assert (tmp_path / "loopkit.toml").read_text(encoding="utf-8").count(
+        'knowledge = "knowledge"'
+    ) == 1
 
 
 def test_quiet_json_and_inline_knowledge(capsys: pytest.CaptureFixture[str]) -> None:
@@ -71,7 +76,9 @@ def test_repeated_instructions_stay_separate(capsys: pytest.CaptureFixture[str])
     capsys.readouterr()
 
 
-def test_instructions_file_and_conflicts(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_instructions_file_and_conflicts(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     path = tmp_path / "instructions.txt"
     path.write_text("Answer in Spanish.\n", encoding="utf-8")
     model = ScriptedModel(accepted("Catorce días.", "p1", instructions=1))
@@ -91,14 +98,25 @@ def test_instructions_file_and_conflicts(tmp_path: Path, capsys: pytest.CaptureF
     assert "Spanish" in str(model.calls[0]["user"])
 
     code = main(
-        ["ask", "Refunds?", "--knowledge", "Refunds last 14 days.", "--instructions", "A", "--instructions-file", str(path)],
+        [
+            "ask",
+            "Refunds?",
+            "--knowledge",
+            "Refunds last 14 days.",
+            "--instructions",
+            "A",
+            "--instructions-file",
+            str(path),
+        ],
         client=ScriptedModel([]),
     )
     assert code == 2
     assert "either" in capsys.readouterr().err
 
 
-def test_missing_project_runs_with_no_passages_and_warns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+def test_missing_project_is_a_user_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     monkeypatch.chdir(tmp_path)
     model = ScriptedModel(accepted("Hello. How can I help?", instructions=3))
     assert main(["ask", "Hello there", "--quiet"], client=model) == 0
@@ -176,13 +194,15 @@ def test_debug_flag_writes_every_call_to_the_log(tmp_path: Path, monkeypatch: py
     disable_debug_log(tmp_path / "loopkit-debug.log")
 
 
-def test_serve_command_uses_the_loop(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+def test_serve_command_uses_the_loop(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     seen: dict[str, object] = {}
 
-    def fake_serve(loop: object, host: str, port: int) -> None:
+    def fake_serve(loop: Loop, host: str, port: int) -> None:
         seen["host"] = host
         seen["port"] = port
-        seen["passages"] = len(getattr(loop, "knowledge").passages)
+        seen["passages"] = len(loop.knowledge.passages)
 
     monkeypatch.setattr("loopkit.cli.serve", fake_serve)
     code = main(

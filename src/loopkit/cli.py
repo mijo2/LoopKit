@@ -78,9 +78,17 @@ def main(argv: list[str] | None = None, *, client: ModelClient | None = None) ->
         "--instructions-file",
         help="Read instructions from this file, one per non-empty line.",
     )
-    shared.add_argument("--model", help=f"Model id. Defaults to the provider's model, or LOOPKIT_MODEL. xAI default: {DEFAULT_MODEL}.")
-    shared.add_argument("--provider", help="xai, openai, anthropic, or compatible. Default: the one API key that is set.")
-    shared.add_argument("--base-url", help="OpenAI-compatible base URL, for example http://localhost:11434/v1.")
+    shared.add_argument(
+        "--model",
+        help=f"Model id. Defaults to the provider's model, or LOOPKIT_MODEL. xAI default: {DEFAULT_MODEL}.",
+    )
+    shared.add_argument(
+        "--provider",
+        help="xai, openai, anthropic, or compatible. Default: the one API key that is set.",
+    )
+    shared.add_argument(
+        "--base-url", help="OpenAI-compatible base URL, for example http://localhost:11434/v1."
+    )
     shared.add_argument("--max-turns", type=int, help="Draft and check rounds. Default: 3.")
     shared.add_argument(
         "--check-mode",
@@ -144,10 +152,14 @@ def main(argv: list[str] | None = None, *, client: ModelClient | None = None) ->
     ask_command.add_argument("--json", action="store_true", help="Print the answer object as JSON.")
     ask_command.add_argument("--quiet", action="store_true", help="Print the answer only.")
 
-    serve_command = commands.add_parser("serve", parents=[shared], help="Try the loaded loop in a browser")
+    serve_command = commands.add_parser(
+        "serve", parents=[shared], help="Try the loaded loop in a browser"
+    )
     serve_command.add_argument("--host", default="127.0.0.1", help="Default: 127.0.0.1.")
     serve_command.add_argument("--port", type=int, default=8080)
-    serve_command.add_argument("--trace", action="store_true", help="Print each loop step to stderr.")
+    serve_command.add_argument(
+        "--trace", action="store_true", help="Print each loop step to stderr."
+    )
 
     commands.add_parser("init", help="Write loopkit.toml and a sample knowledge file")
 
@@ -161,7 +173,7 @@ def main(argv: list[str] | None = None, *, client: ModelClient | None = None) ->
             return 0
         if args.command == "ask":
             task = _task(args)
-            trace = False if args.quiet else True
+            trace = not args.quiet
             loop = _loop_from_args(args, client, trace=trace)
             _print_warnings(loop)
             answer = loop.ask(task)
@@ -186,7 +198,9 @@ def main(argv: list[str] | None = None, *, client: ModelClient | None = None) ->
     return 2
 
 
-def _loop_from_args(args: argparse.Namespace, client: ModelClient | None, *, trace: bool | None) -> Loop:
+def _loop_from_args(
+    args: argparse.Namespace, client: ModelClient | None, *, trace: bool | None
+) -> Loop:
     instructions = _instructions(args)
     kwargs: dict[str, object] = {}
     if args.model:

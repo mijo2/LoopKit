@@ -24,13 +24,13 @@ except PackageNotFoundError:
     __version__ = "0.1.0"
 
 __all__ = [
-    "Answer",
     "BOOK_INSTRUCTIONS",
-    "Check",
-    "Citation",
     "DEFAULT_INSTRUCTIONS",
     "DEFAULT_MODEL",
     "DEFAULT_MODELS",
+    "Answer",
+    "Check",
+    "Citation",
     "InstructionCheck",
     "Knowledge",
     "Loop",
@@ -42,6 +42,6 @@ __all__ = [
     "default_instructions",
     "Passage",
     "ResponseKind",
-    "ask",
     "__version__",
+    "ask",
 ]

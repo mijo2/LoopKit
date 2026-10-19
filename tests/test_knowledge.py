@@ -28,7 +28,10 @@ def test_directory_reads_text_skips_other_types_and_keeps_order(tmp_path: Path) 
     assert all("hidden" not in passage.text for passage in knowledge.passages)
 
 
-def test_missing_single_token_is_an_error() -> None:
+def test_missing_single_token_is_an_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Run from an empty directory so the result does not depend on whether the
+    # repository happens to contain a folder called "docs".
+    monkeypatch.chdir(tmp_path)
     with pytest.raises(LoopError, match="No knowledge at docs"):
         Knowledge.load("docs")
 

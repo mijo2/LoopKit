@@ -1,0 +1,30 @@
+# Citation metadata for this repository.
+# GitHub reads this file and shows a "Cite this repository" button in the
+# sidebar, with APA and BibTeX output. Format: https://citation-file-format.github.io
+#
+# Keep `version` and `date-released` in step with releases (see docs/maintainers.md).
+# Add a `doi` once the project has one (e.g. from Zenodo's GitHub integration).
+cff-version: 1.2.0
+message: "If you use loop-kit in your work, please cite it using the metadata in this file."
+type: software
+title: "loop-kit"
+abstract: >-
+  A Python library that answers questions from a knowledge base with an
+  engineered draft, check, and revise loop. The caller brings documents and
+  instructions; retrieval, prompts, the checker, citation validation, and the
+  stop condition ship with the library.
+authors:
+  - family-names: Jolly
+    given-names: Milan
+version: 0.1.0
+date-released: "2026-01-01"
+license: MIT
+repository-code: "https://github.com/OWNER/loop-kit"
+url: "https://github.com/OWNER/loop-kit"
+keywords:
+  - llm
+  - rag
+  - retrieval-augmented-generation
+  - knowledge-base
+  - grounded-answers
+  - python
