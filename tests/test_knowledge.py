@@ -112,3 +112,11 @@ def test_duplicate_passage_ids_raise() -> None:
 def test_empty_text_raises() -> None:
     with pytest.raises(LoopError, match="empty"):
         Knowledge.load("   ")
+
+
+def test_none_is_an_empty_knowledge_base_with_a_warning() -> None:
+    knowledge = Knowledge.load(None)
+    assert knowledge.is_empty
+    assert knowledge.passages == ()
+    assert "No knowledge base was given" in knowledge.warnings[0]
+    assert Knowledge.empty("custom reason").warnings == ("custom reason",)

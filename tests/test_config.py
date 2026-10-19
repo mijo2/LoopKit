@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from loopkit.errors import LoopError
+from loopkit.errors import LoopError, LoopWarning
 from loopkit.loop import Loop
 from tests.fakes import ScriptedModel, accepted
 
@@ -86,10 +86,26 @@ def test_check_mode_and_response_come_from_the_file(tmp_path: Path) -> None:
         Loop.load(tmp_path / "loopkit.toml", client=ScriptedModel([]))
 
 
-def test_missing_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_missing_file_loads_an_empty_knowledge_base_with_a_warning(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
-    with pytest.raises(LoopError, match="loopkit init"):
-        Loop.load()
+    with pytest.warns(LoopWarning, match="loopkit init"):
+        loop = Loop.load(client=ScriptedModel([]))
+    assert loop.knowledge.is_empty
+    assert any("no knowledge was given" in warning for warning in loop.knowledge.warnings)
+
+
+def test_explicit_missing_path_is_still_an_error(tmp_path: Path) -> None:
+    with pytest.raises(LoopError, match="No project file"):
+        Loop.load(tmp_path / "nope.toml", client=ScriptedModel([]))
+
+
+def test_file_without_knowledge_warns_instead_of_failing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _project(tmp_path, 'instructions = ["Be brief."]\n')
+    monkeypatch.chdir(tmp_path)
+    with pytest.warns(LoopWarning, match="does not set knowledge"):
+        loop = Loop.load(client=ScriptedModel([]))
+    assert loop.knowledge.is_empty
+    assert loop.instructions == ("Be brief.",)
 
 
 def test_ask_reads_the_project_when_knowledge_is_omitted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1,4 +1,10 @@
-"""Optional ``loopkit.toml``. A project needs a knowledge path and nothing else."""
+"""Optional ``loopkit.toml``: the settings for one knowledge base, kept out of code.
+
+The file lives next to the knowledge folder and is read when ``Loop`` is
+built without ``knowledge=`` (``Loop.load()``, the top-level ``ask()``, and
+``loopkit ask`` without ``--knowledge``). Paths in it are relative to the
+file. It never holds an API key. ``loopkit init`` writes a starter copy.
+"""
 
 from __future__ import annotations
 
@@ -18,6 +24,8 @@ ALLOWED_KEYS = {
     "top_k",
     "check_mode",
     "response",
+    "search",
+    "auto_optimize",
 }
 CHECK_MODES = ("each", "all")
 RESPONSES = ("normal", "book")
@@ -26,7 +34,14 @@ FILENAME = "loopkit.toml"
 
 @dataclass(frozen=True)
 class Project:
-    knowledge: Path | tuple[Path, ...]
+    """Settings read from one ``loopkit.toml``.
+
+    ``knowledge`` is None when the file did not name one, or when there was
+    no file and ``missing_ok`` was set. ``note`` then says why, so the loop
+    can warn the user in those words.
+    """
+
+    knowledge: Path | tuple[Path, ...] | None
     instructions: tuple[str, ...] | None
     model: str | None
     provider: str | None
@@ -36,11 +51,30 @@ class Project:
     check_mode: str | None
     response: str | None
     directory: Path
+    note: str | None = None
+    search: bool | None = None
+    auto_optimize: bool | None = None
 
 
-def load_project(path: str | Path | None = None) -> Project:
+def load_project(path: str | Path | None = None, *, missing_ok: bool = False) -> Project:
+    """Read ``loopkit.toml``.
+
+    With no ``path`` the file is looked for in the working directory. When it
+    is not there and ``missing_ok`` is set, an empty project is returned with
+    a ``note`` instead of an error, so a loop can still run with no passages.
+    An explicit ``path`` that does not exist is always an error.
+    """
+
     file = Path(path) if path is not None else Path.cwd() / FILENAME
     if not file.is_file():
+        if path is None and missing_ok:
+            return _empty_project(
+                file.parent,
+                f"No {FILENAME} in {file.parent} and no knowledge was given. "
+                "The loop runs in open mode: the model answers from its own knowledge and the "
+                "audit checks accuracy instead of grounding. To answer from documents, "
+                "pass --knowledge, or run `loopkit init`.",
+            )
         raise LoopError(
             f"No {file.name} at {file}. Pass --knowledge, or run `loopkit init`."
             if path is None
@@ -61,12 +95,16 @@ def load_project(path: str | Path | None = None) -> Project:
             f"Unknown {file.name} setting: {names}. Allowed settings: {allowed}. "
             "Set an API key in the environment, not in this file."
         )
-    if "knowledge" not in data:
-        raise LoopError(f"{file.name} needs a knowledge path.")
-
     base = file.parent
+    note = None
+    if "knowledge" not in data:
+        note = (
+            f"{file} does not set knowledge. The loop runs in open mode: the model answers "
+            "from its own knowledge and the audit checks accuracy instead of grounding. "
+            'To answer from documents, add knowledge = "knowledge" to the file, or pass --knowledge.'
+        )
     return Project(
-        knowledge=_knowledge(data["knowledge"], base, file.name),
+        knowledge=None if note else _knowledge(data["knowledge"], base, file.name),
         instructions=_instructions(data.get("instructions"), file.name),
         model=_optional_str(data.get("model"), "model", file.name),
         provider=_optional_str(data.get("provider"), "provider", file.name),
@@ -76,6 +114,25 @@ def load_project(path: str | Path | None = None) -> Project:
         check_mode=_optional_choice(data.get("check_mode"), "check_mode", file.name, CHECK_MODES),
         response=_optional_choice(data.get("response"), "response", file.name, RESPONSES),
         directory=base,
+        note=note,
+        search=_optional_bool(data.get("search"), "search", file.name),
+        auto_optimize=_optional_bool(data.get("auto_optimize"), "auto_optimize", file.name),
+    )
+
+
+def _empty_project(directory: Path, note: str) -> Project:
+    return Project(
+        knowledge=None,
+        instructions=None,
+        model=None,
+        provider=None,
+        base_url=None,
+        max_turns=None,
+        top_k=None,
+        check_mode=None,
+        response=None,
+        directory=directory,
+        note=note,
     )
 
 
@@ -136,6 +193,14 @@ def _optional_choice(
         names = ", ".join(allowed)
         raise LoopError(f"{name} in {filename} must be one of: {names}.")
     return value.strip().lower()
+
+
+def _optional_bool(value: object, name: str, filename: str) -> bool | None:
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise LoopError(f"{name} in {filename} must be true or false.")
+    return value
 
 
 def _optional_int(value: object, name: str, filename: str) -> int | None:

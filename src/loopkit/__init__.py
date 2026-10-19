@@ -2,10 +2,20 @@
 
 from importlib.metadata import PackageNotFoundError, version
 
-from loopkit.errors import LoopError
+from loopkit.errors import LoopError, LoopWarning
 from loopkit.knowledge import Knowledge, Passage
 from loopkit.client import DEFAULT_MODELS
-from loopkit.loop import BOOK_INSTRUCTIONS, DEFAULT_INSTRUCTIONS, DEFAULT_MODEL, Loop, ask
+from loopkit.loop import (
+    BOOK_INSTRUCTIONS,
+    DEFAULT_INSTRUCTIONS,
+    DEFAULT_MODEL,
+    OPEN_BOOK_INSTRUCTIONS,
+    OPEN_INSTRUCTIONS,
+    SEARCH_INSTRUCTIONS,
+    Loop,
+    ask,
+    default_instructions,
+)
 from loopkit.models import Answer, Check, Citation, InstructionCheck, ResponseKind
 
 try:
@@ -25,6 +35,11 @@ __all__ = [
     "Knowledge",
     "Loop",
     "LoopError",
+    "LoopWarning",
+    "OPEN_BOOK_INSTRUCTIONS",
+    "OPEN_INSTRUCTIONS",
+    "SEARCH_INSTRUCTIONS",
+    "default_instructions",
     "Passage",
     "ResponseKind",
     "ask",

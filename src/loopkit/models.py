@@ -7,6 +7,7 @@ from typing import Literal
 
 StoppedReason = Literal["passed", "max_turns"]
 ResponseKind = Literal["normal", "book"]
+LoopMode = Literal["knowledge", "open"]
 
 
 @dataclass(frozen=True)
@@ -50,7 +51,12 @@ class Answer:
     """The user-facing text plus the trace of the loop that produced it.
 
     ``response`` is ``normal`` for an ordinary answer and ``book`` when the
-    loop was asked for a long-form response.
+    loop was asked for a long-form response. ``mode`` is ``knowledge`` when
+    the answer was drafted from passages and ``open`` when there were none
+    and the model answered from its own knowledge; in open mode ``grounded``
+    on each check means the accuracy audit found no false or invented claim.
+    ``role`` is the prefix the optimize step wrote for this task, or ``""``
+    when ``auto_optimize`` was off or the step failed.
     """
 
     text: str
@@ -59,6 +65,8 @@ class Answer:
     checks: tuple[Check, ...]
     turns: int
     stopped_reason: StoppedReason
+    mode: LoopMode = "knowledge"
+    role: str = ""
 
     def __str__(self) -> str:
         return self.text
@@ -67,6 +75,8 @@ class Answer:
         return {
             "text": self.text,
             "response": self.response,
+            "mode": self.mode,
+            "role": self.role,
             "turns": self.turns,
             "stopped_reason": self.stopped_reason,
             "citations": [

@@ -73,17 +73,22 @@ class Knowledge:
     passages: tuple[Passage, ...]
     warnings: tuple[str, ...] = ()
 
+    NO_KNOWLEDGE_WARNING = (
+        "No knowledge base was given. The loop runs in open mode: the model answers from "
+        "its own knowledge (and web search when search is on), and the audit checks accuracy "
+        "instead of grounding. To answer from documents, pass knowledge= (a file, a directory, "
+        "or text), or run `loopkit init`."
+    )
+
     def __post_init__(self) -> None:
         """Refuse a knowledge base that cannot be cited.
 
-        An empty passage list is an error. So is a passage with a blank id
-        or blank text, and so are two passages that share an id. Ids are
-        what answers cite, so a duplicate would make a citation point at
-        more than one slice.
+        A passage with a blank id or blank text is an error, and so are two
+        passages that share an id. Ids are what answers cite, so a duplicate
+        would make a citation point at more than one slice. An empty passage
+        list is allowed: see :meth:`empty`.
         """
 
-        if not self.passages:
-            raise LoopError("The knowledge base is empty.")
         ids = [passage.id for passage in self.passages]
         if any(not passage.id.strip() or not passage.text.strip() for passage in self.passages):
             raise LoopError("Every passage needs an id and text.")
@@ -91,10 +96,27 @@ class Knowledge:
             raise LoopError("Passage ids must be unique.")
 
     @classmethod
-    def load(cls, source: KnowledgeLike) -> Knowledge:
+    def empty(cls, reason: str | None = None) -> Knowledge:
+        """A knowledge base with no passages.
+
+        The loop still runs: the drafter is told there are no passages and
+        the default instructions make it say the answer is not available.
+        ``reason`` is the warning the caller sees; the default explains that
+        no knowledge was given.
+        """
+
+        return cls(passages=(), warnings=(reason or cls.NO_KNOWLEDGE_WARNING,))
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.passages
+
+    @classmethod
+    def load(cls, source: KnowledgeLike | None) -> Knowledge:
         """Build a knowledge base from ``source``.
 
-        A :class:`Knowledge` instance is returned unchanged. A path is read
+        ``None`` is an empty knowledge base with a warning, see
+        :meth:`empty`. A :class:`Knowledge` instance is returned unchanged. A path is read
         from disk. A string that is not a path is kept as the document when
         it contains whitespace, and rejected when it is a single missing
         token such as ``docs``. A dict maps a document name to its text. A
@@ -105,6 +127,8 @@ class Knowledge:
         and so on, in read order.
         """
 
+        if source is None:
+            return cls.empty()
         if isinstance(source, Knowledge):
             return source
         documents: list[tuple[str, str]] = []

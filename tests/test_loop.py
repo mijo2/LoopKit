@@ -325,3 +325,115 @@ def test_reuses_loaded_knowledge() -> None:
     loop = Loop(knowledge=POLICY, client=model)
     assert loop.ask("First question about refunds?").text == "Once. [p1]"
     assert loop.ask("Second question about keys?").text == "Twice. [p1]"
+
+
+def test_loop_without_knowledge_warns_and_tells_the_drafter_there_are_no_passages() -> None:
+    import pytest
+
+    from loopkit.errors import LoopWarning
+
+    from loopkit.loop import OPEN_INSTRUCTIONS
+
+    model = ScriptedModel(accepted("Thirty days is common, but it varies by seller.", instructions=3))
+    with pytest.warns(LoopWarning, match="No knowledge base was given"):
+        loop = Loop(client=model, trace=False)
+    assert loop.knowledge.is_empty
+    assert loop.mode == "open"
+    assert loop.instructions == OPEN_INSTRUCTIONS
+    answer = loop.ask("What is the refund window?")
+    assert answer.mode == "open"
+    assert answer.stopped_reason == "passed"
+    assert answer.citations == ()
+    assert answer.to_dict()["mode"] == "open"
+
+    # Nothing sent to the model in open mode mentions passages or a knowledge base.
+    for call in model.calls:
+        for text in (str(call["system"]), str(call["user"])):
+            lowered = text.lower()
+            assert "passage" not in lowered, text
+            assert "knowledge" not in lowered, text
+            assert "cited ids" not in lowered, text
+            assert "[p1]" not in lowered, text
+    prompt = str(model.calls[0]["user"])
+    assert "1. Answer the task directly and completely." in prompt
+    assert "Answer the task fully and directly." in str(model.calls[0]["system"])
+    review = model.calls[-1]
+    assert "You audit a draft for accuracy" in str(review["system"])
+    assert "Do not require sources or citations." in str(review["system"])
+
+
+def test_open_mode_all_check_and_stray_citation_note() -> None:
+    import pytest
+
+    from loopkit.errors import LoopWarning
+    from loopkit.schemas import Draft
+    from tests.fakes import audit
+
+    model = ScriptedModel(
+        [
+            Draft(answer="It is 30 days [p1].", cited_ids=["p1"]),
+            audit(revise=False, instruction_count=3),
+            Draft(answer="It is commonly 30 days, but it varies.", cited_ids=[]),
+            audit(revise=False, instruction_count=3),
+        ]
+    )
+    with pytest.warns(LoopWarning):
+        loop = Loop(client=model, check_mode="all", trace=False)
+    answer = loop.ask("Refund window?")
+    assert answer.turns == 2
+    assert "Remove the bracketed reference markers (p1)" in answer.checks[0].notes
+    assert "passage" not in answer.checks[0].notes.lower()
+    for call in model.calls:
+        assert "passage" not in str(call["system"]).lower()
+        assert "passage" not in str(call["user"]).lower()
+    assert "Do not require sources or citations unless an instruction asks for them." in str(model.calls[1]["system"])
+
+
+def test_book_open_mode_uses_open_book_instructions() -> None:
+    import pytest
+
+    from loopkit.errors import LoopWarning
+    from loopkit.loop import OPEN_BOOK_INSTRUCTIONS
+
+    with pytest.warns(LoopWarning):
+        loop = Loop(client=ScriptedModel([]), response="book", trace=False)
+    assert loop.instructions == OPEN_BOOK_INSTRUCTIONS
+
+
+def test_search_is_passed_only_to_draft_and_review_calls() -> None:
+    from loopkit.loop import SEARCH_INSTRUCTIONS
+    from tests.fakes import SearchAwareModel
+
+    model = SearchAwareModel(accepted("Thirty days. [p1]", "p1"))
+    loop = Loop(knowledge="Refunds last 30 days after the charge.", client=model, search=True, trace=False)
+    assert loop.search is True
+    assert loop.instructions == SEARCH_INSTRUCTIONS
+    loop.ask("Refund window?")
+    # draft, 4 instruction checks, grounding
+    assert model.search_flags == [True, False, False, False, False, True]
+    assert "Web search is available" in str(model.calls[0]["system"])
+    assert "Web search is available to you" in str(model.calls[-1]["system"])
+    assert "Web search" not in str(model.calls[1]["system"])
+
+
+def test_search_env_flag_and_toml(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from tests.fakes import SearchAwareModel
+
+    monkeypatch.setenv("LOOPKIT_SEARCH", "1")
+    loop = Loop(knowledge="Refunds last 30 days after the charge.", client=SearchAwareModel([]), trace=False)
+    assert loop.search is True
+    monkeypatch.delenv("LOOPKIT_SEARCH")
+
+    (tmp_path / "loopkit.toml").write_text('knowledge = "notes.md"\nsearch = true\n', encoding="utf-8")
+    (tmp_path / "notes.md").write_text("Desks ship in two weeks.\n", encoding="utf-8")
+    loop = Loop.load(tmp_path / "loopkit.toml", client=SearchAwareModel([]), trace=False)
+    assert loop.search is True
+
+    (tmp_path / "loopkit.toml").write_text('knowledge = "notes.md"\nsearch = "yes"\n', encoding="utf-8")
+    with pytest.raises(LoopError, match="true or false"):
+        Loop.load(tmp_path / "loopkit.toml", client=ScriptedModel([]))
+
+
+def test_custom_client_without_search_support_is_refused_early() -> None:
+    with pytest.raises(LoopError, match="accepts a search keyword"):
+        Loop(knowledge="Refunds last 30 days after the charge.", client=ScriptedModel([]), search=True)

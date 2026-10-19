@@ -1,3 +1,4 @@
+import io
 import json
 from pathlib import Path
 
@@ -97,10 +98,82 @@ def test_instructions_file_and_conflicts(tmp_path: Path, capsys: pytest.CaptureF
     assert "either" in capsys.readouterr().err
 
 
-def test_missing_project_is_a_user_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+def test_missing_project_runs_with_no_passages_and_warns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.chdir(tmp_path)
-    assert main(["ask", "Hello there"]) == 2
-    assert "loopkit init" in capsys.readouterr().err
+    model = ScriptedModel(accepted("Hello. How can I help?", instructions=3))
+    assert main(["ask", "Hello there", "--quiet"], client=model) == 0
+    captured = capsys.readouterr()
+    assert "no knowledge was given" in captured.err
+    assert "loopkit init" in captured.err
+    assert "Hello. How can I help?" in captured.out
+    prompt = str(model.calls[0]["user"])
+    assert "passage" not in prompt.lower()
+    assert "knowledge" not in prompt.lower()
+
+
+def test_task_from_stdin_and_file_keeps_backticks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    task = "What does `ls -la` do?\n```sh\nls -la\n```"
+    knowledge = "ls lists files. The -la flags show all files in long form."
+
+    monkeypatch.setattr("sys.stdin", io.StringIO(task))
+    model = ScriptedModel(accepted("It lists files. [p1]", "p1"))
+    assert main(["ask", "--knowledge", knowledge, "--quiet"], client=model) == 0
+    assert task in str(model.calls[0]["user"])
+
+    monkeypatch.setattr("sys.stdin", io.StringIO(task))
+    model = ScriptedModel(accepted("It lists files. [p1]", "p1"))
+    assert main(["ask", "-", "--knowledge", knowledge, "--quiet"], client=model) == 0
+    assert task in str(model.calls[0]["user"])
+
+    task_file = tmp_path / "task.txt"
+    task_file.write_text(task, encoding="utf-8")
+    model = ScriptedModel(accepted("It lists files. [p1]", "p1"))
+    assert main(["ask", "--task-file", str(task_file), "--knowledge", knowledge, "--quiet"], client=model) == 0
+    assert task in str(model.calls[0]["user"])
+
+    assert main(["ask", "also here", "--task-file", str(task_file), "--knowledge", knowledge], client=model) == 2
+    assert "not both" in capsys.readouterr().err
+
+    class Tty(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    monkeypatch.setattr("sys.stdin", Tty())
+    assert main(["ask", "--knowledge", knowledge], client=model) == 2
+    assert "Give a task" in capsys.readouterr().err
+
+
+def test_debug_flag_writes_every_call_to_the_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.chdir(tmp_path)
+    model = ScriptedModel(
+        [
+            Draft(answer="Unsure.", cited_ids=[]),
+            *checks(revise=True, notes="Name the window."),
+            *accepted("14 days. [p1]", "p1"),
+        ]
+    )
+    code = main(
+        ["ask", "Refund window?", "--knowledge", "Refunds last 14 days after purchase.", "--quiet", "--debug"],
+        client=model,
+    )
+    assert code == 0
+    assert "debug log:" in capsys.readouterr().err
+    log = (tmp_path / "loopkit-debug.log").read_text(encoding="utf-8")
+    assert "] ASK" in log
+    assert "CALL 1: draft (turn 1)" in log
+    assert "--- SYSTEM PROMPT ---" in log
+    assert "--- USER PROMPT ---" in log
+    assert "RESULT 1: draft (turn 1) -> ok" in log
+    assert "CALL 2: check instruction 1 (turn 1)" in log
+    assert "check grounding (turn 1)" in log
+    assert "TURN 1 DECISION: revise" in log
+    assert "Name the window." in log
+    assert "TURN 2 DECISION: passed" in log
+    assert "] ANSWER" in log
+    assert "14 days. [p1]" in log
+    from loopkit.debuglog import disable_debug_log
+
+    disable_debug_log(tmp_path / "loopkit-debug.log")
 
 
 def test_serve_command_uses_the_loop(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:

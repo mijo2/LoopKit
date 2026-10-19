@@ -114,8 +114,9 @@ def test_only_xai_key_uses_the_xai_client(monkeypatch: pytest.MonkeyPatch) -> No
             api_key: str,
             timeout: float,
             max_output_tokens: int | None = None,
+            search: bool = False,
         ) -> None:
-            created.update(model=model, api_key=api_key, timeout=timeout, max_output_tokens=max_output_tokens)
+            created.update(model=model, api_key=api_key, timeout=timeout, max_output_tokens=max_output_tokens, search=search)
             self.model = model
 
     monkeypatch.setattr("loopkit.client.XAIClient", Fake)
@@ -312,3 +313,128 @@ def test_cli_provider_flag(monkeypatch: pytest.MonkeyPatch, capsys: pytest.Captu
     assert seen["provider"] == "openai"
     assert seen["base_url"] == "https://example.test/v1"
     assert capsys.readouterr().out.strip() == "Fourteen days."
+
+
+def test_xai_client_retries_transient_grpc_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The real SDK is installed; only the network call is replaced."""
+
+    import grpc
+
+    _clear(monkeypatch)
+    monkeypatch.setenv("LOOPKIT_MAX_RETRIES", "2")
+    monkeypatch.setattr("loopkit.retry.time.sleep", lambda _: None)
+    from loopkit.client import XAIClient
+
+    client = XAIClient(model="grok-test", api_key="xai-test")
+    calls = {"n": 0}
+
+    class Busy(grpc.RpcError):
+        def code(self) -> grpc.StatusCode:
+            return grpc.StatusCode.RESOURCE_EXHAUSTED
+
+        def details(self) -> str:
+            return "rate limited"
+
+    class Response:
+        content = '{"followed": true, "note": ""}'
+        id = "resp_1"
+        finish_reason = "stop"
+        usage = None
+
+    class FakeChat:
+        def append(self, message: object) -> None:
+            pass
+
+        def parse(self, shape: type[object]) -> tuple[object, object]:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise Busy()
+            return Response(), shape(followed=True, note="")
+
+    monkeypatch.setattr(client._sdk.chat, "create", lambda **params: FakeChat())
+    parsed = client.parse(system_text="rules", user_text="task", schema=OneCheck)
+    assert isinstance(parsed, OneCheck) and parsed.followed
+    assert calls["n"] == 2
+    assert client.last_call is not None
+    assert client.last_call["raw_text"] == '{"followed": true, "note": ""}'
+    assert client.last_call["response"] == {"id": "resp_1", "finish_reason": "stop"}
+
+    class Bad(grpc.RpcError):
+        def code(self) -> grpc.StatusCode:
+            return grpc.StatusCode.INVALID_ARGUMENT
+
+    class FailingChat(FakeChat):
+        def parse(self, shape: type[object]) -> tuple[object, object]:
+            calls["n"] += 1
+            raise Bad()
+
+    calls["n"] = 0
+    monkeypatch.setattr(client._sdk.chat, "create", lambda **params: FailingChat())
+    with pytest.raises(grpc.RpcError):
+        client.parse(system_text="rules", user_text="task", schema=OneCheck)
+    assert calls["n"] == 1  # a bad request is not retried
+
+
+def test_search_adds_the_provider_tool_and_reads_the_final_block(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear(monkeypatch)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    draft = {"answer": "The 2024 rule is 30 days (per example.com).", "cited_ids": []}
+    seen = _install(
+        monkeypatch,
+        {
+            "output": [
+                {"type": "web_search_call", "status": "completed"},
+                {"type": "message", "content": [{"type": "output_text", "text": json.dumps(draft)}]},
+            ]
+        },
+    )
+    loop = Loop(knowledge=POLICY, search=True, trace=False)
+    parsed = loop._client.parse(system_text="rules", user_text="task", schema=Draft, search=True)
+    assert isinstance(parsed, Draft)
+    body = _request_json(seen[0])
+    assert body["tools"] == [{"type": "web_search"}]
+    # Without search the tool is not sent.
+    loop._client.parse(system_text="rules", user_text="task", schema=Draft)
+    assert "tools" not in _request_json(seen[1])
+
+    _clear(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    seen = _install(
+        monkeypatch,
+        {
+            "content": [
+                {"type": "text", "text": "I'll look that up."},
+                {"type": "server_tool_use", "name": "web_search", "input": {"query": "refund rule"}},
+                {"type": "web_search_tool_result", "content": []},
+                {"type": "text", "text": json.dumps(draft)},
+            ],
+            "stop_reason": "end_turn",
+        },
+    )
+    loop = Loop(knowledge=POLICY, search=True, trace=False)
+    parsed = loop._client.parse(system_text="rules", user_text="task", schema=Draft, search=True)
+    assert isinstance(parsed, Draft) and parsed.answer.startswith("The 2024 rule")
+    body = _request_json(seen[0])
+    assert body["tools"] == [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}]
+
+
+def test_search_is_refused_for_the_compatible_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear(monkeypatch)
+    with pytest.raises(LoopError, match="search needs a provider"):
+        Loop(knowledge=POLICY, base_url="http://localhost:11434/v1", model="llama3.1", search=True)
+
+
+def test_no_text_reason_names_the_stop_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    _install(monkeypatch, {"content": [], "stop_reason": "max_tokens"})
+    loop = Loop(knowledge=POLICY, trace=False)
+    with pytest.raises(LoopError, match="stop_reason: max_tokens"):
+        loop._client.parse(system_text="rules", user_text="task", schema=Draft)
+
+    _clear(monkeypatch)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    _install(monkeypatch, {"output": [{"type": "message", "content": [{"type": "refusal", "refusal": "I cannot help with that."}]}], "status": "completed"})
+    loop = Loop(knowledge=POLICY, trace=False)
+    with pytest.raises(LoopError, match="The model refused: I cannot help"):
+        loop._client.parse(system_text="rules", user_text="task", schema=Draft)

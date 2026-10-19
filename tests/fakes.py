@@ -23,6 +23,18 @@ class ScriptedModel:
         return reply
 
 
+class SearchAwareModel(ScriptedModel):
+    """A scripted model whose parse accepts ``search``, recording each flag."""
+
+    def __init__(self, replies: list[object]) -> None:
+        super().__init__(replies)
+        self.search_flags: list[bool] = []
+
+    def parse(self, *, system_text: str, user_text: str, schema: type[object], search: bool = False) -> object:
+        self.search_flags.append(search)
+        return super().parse(system_text=system_text, user_text=user_text, schema=schema)
+
+
 def _verdicts(
     count: int | None = None,
     *,

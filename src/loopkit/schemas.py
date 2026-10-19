@@ -3,6 +3,17 @@
 from pydantic import BaseModel, Field
 
 
+class RolePrefix(BaseModel):
+    """What the optimize step returns: who the model should be for this task."""
+
+    role: str = Field(
+        description=(
+            "Two to four sentences in the second person, starting with 'You are', naming the "
+            "field, the sub-speciality, and the working habits that fit this task."
+        )
+    )
+
+
 class Draft(BaseModel):
     """What the drafter returns. The caller never sees this type."""
 

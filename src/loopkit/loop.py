@@ -8,30 +8,37 @@ from __future__ import annotations
 
 import os
 import sys
+import time
+import warnings
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Literal, Protocol, TypeVar, cast
 
 from loopkit.client import DEFAULT_MODELS, make_client
 from loopkit.config import CHECK_MODES, RESPONSES, load_project
-from loopkit.errors import LoopError
+from loopkit.debuglog import block, enable_debug_log, logger, resolve_debug
+from loopkit.errors import LoopError, LoopWarning
 from loopkit.knowledge import Knowledge, KnowledgeLike, Passage
 from loopkit.models import Answer, Check, Citation, InstructionCheck, ResponseKind, StoppedReason
 from loopkit.prompts import (
-    CHECK_ONE_SYSTEM,
-    CHECK_SYSTEM,
-    DRAFT_SYSTEM,
-    GROUND_SYSTEM,
+    OPTIMIZE_SYSTEM,
     check_one_prompt,
+    check_one_system,
     check_prompt,
+    check_system,
     citation_ids,
     draft_prompt,
+    draft_system,
     ground_prompt,
+    optimize_prompt,
+    review_system,
+    with_role,
 )
 from loopkit.retrieve import select
-from loopkit.schemas import Draft, DraftCheck, GroundingCheck, InstructionVerdict, OneCheck
+from loopkit.schemas import Draft, DraftCheck, GroundingCheck, InstructionVerdict, OneCheck, RolePrefix
 
 CheckMode = Literal["each", "all"]
+Mode = Literal["knowledge", "open"]
 
 DEFAULT_MODEL = DEFAULT_MODELS["xai"]
 DEFAULT_MAX_TURNS = 3
@@ -50,14 +57,55 @@ BOOK_INSTRUCTIONS = (
     "Write a long response with headings. It may be as long as a book when the passages support that. "
     "Do not add facts that are not in the passages.",
 )
+# With web search and passages, the passages still come first.
+SEARCH_INSTRUCTIONS = (
+    "Answer the task from the knowledge passages first. Use web search only for what the passages "
+    "do not cover, and name the web source in the answer for those facts.",
+    "Cite supporting passages inline as [p1], [p2], and so on.",
+    "If neither the passages nor a search result contains the answer, say that clearly and do not guess.",
+    "Be concise. Do not add facts that are not in the passages or a named web source.",
+)
+SEARCH_BOOK_INSTRUCTIONS = (
+    SEARCH_INSTRUCTIONS[0],
+    SEARCH_INSTRUCTIONS[1],
+    SEARCH_INSTRUCTIONS[2],
+    "Write a long response with headings. It may be as long as a book when the material supports that. "
+    "Do not add facts that are not in the passages or a named web source.",
+)
+# Open mode: no passages. The model answers from what it knows.
+OPEN_INSTRUCTIONS = (
+    "Answer the task directly and completely.",
+    "When you are not sure of a specific fact, date, figure, name, or quotation, say so instead of presenting a guess as fact.",
+    "Be concise.",
+)
+OPEN_BOOK_INSTRUCTIONS = (
+    "Answer the task directly and completely.",
+    "When you are not sure of a specific fact, date, figure, name, or quotation, say so instead of presenting a guess as fact.",
+    "Write a long response with headings. It may be as long as a book when the subject supports that.",
+)
 # A book-length completion. Providers that cap lower reject the request.
 BOOK_MAX_OUTPUT_TOKENS = 100_000
+
+
+def default_instructions(mode: str, response: str, search: bool = False) -> tuple[str, ...]:
+    """The built-in instruction list for a mode, a response kind, and search."""
+
+    book = response == "book"
+    if mode == "open":
+        return OPEN_BOOK_INSTRUCTIONS if book else OPEN_INSTRUCTIONS
+    if search:
+        return SEARCH_BOOK_INSTRUCTIONS if book else SEARCH_INSTRUCTIONS
+    return BOOK_INSTRUCTIONS if book else DEFAULT_INSTRUCTIONS
 
 T = TypeVar("T")
 
 
 class ModelClient(Protocol):
-    """The only model surface the loop needs. Tests pass a scripted stand-in."""
+    """The only model surface the loop needs. Tests pass a scripted stand-in.
+
+    ``parse`` is called with ``search=True`` only when the loop was built
+    with ``search=True``; a client that does not support it never sees it.
+    """
 
     def parse(self, *, system_text: str, user_text: str, schema: type[T]) -> T:
         """Return one structured result for this step."""
@@ -68,11 +116,18 @@ class Loop:
 
     Build it once and call :meth:`ask` for each task. Documents are read at
     construction, not on every question.
+
+    ``mode`` is ``"knowledge"`` when there are passages and ``"open"`` when
+    there are none. In open mode the drafter answers from the model's own
+    knowledge, the audit checks accuracy instead of grounding, and the
+    built-in instructions do not ask for passages or citations. ``search``
+    turns on the provider's web search for the draft and the accuracy or
+    grounding audit; it is available for xAI, OpenAI, and Anthropic.
     """
 
     def __init__(
         self,
-        knowledge: KnowledgeLike,
+        knowledge: KnowledgeLike | None = None,
         instructions: str | Sequence[str] | None = None,
         *,
         model: str | None = None,
@@ -86,6 +141,9 @@ class Loop:
         trace: bool | None = None,
         check_mode: str | None = None,
         response: str | None = None,
+        debug: str | Path | bool | None = None,
+        search: bool | None = None,
+        auto_optimize: bool | None = None,
     ) -> None:
         if max_turns < 1:
             raise LoopError("max_turns must be at least 1.")
@@ -96,14 +154,30 @@ class Loop:
         self.check_mode = cast(CheckMode, _choice(check_mode, "each", "check_mode", CHECK_MODES))
         self.response = cast(ResponseKind, _choice(response, "normal", "response", RESPONSES))
         self.knowledge = knowledge if isinstance(knowledge, Knowledge) else Knowledge.load(knowledge)
-        if instructions is None and self.response == "book":
-            instructions = BOOK_INSTRUCTIONS
+        self.mode: Mode = "open" if self.knowledge.is_empty else "knowledge"
+        self.search = _env_flag("LOOPKIT_SEARCH") if search is None else bool(search)
+        self.auto_optimize = (
+            _env_flag("LOOPKIT_AUTO_OPTIMIZE", default=True) if auto_optimize is None else bool(auto_optimize)
+        )
+        if self.knowledge.is_empty:
+            warnings.warn(self.knowledge.warnings[0], LoopWarning, stacklevel=2)
+        if instructions is None:
+            instructions = default_instructions(self.mode, self.response, self.search)
         self.instructions = normalize_instructions(instructions)
         self.max_turns = max_turns
         self.top_k = top_k
         self.context_budget = context_budget
         self.trace = _env_flag("LOOPKIT_TRACE") if trace is None else trace
+        self._calls = 0
+        self.debug_path: Path | None = resolve_debug(debug)
+        if self.debug_path is not None:
+            self.debug_path = enable_debug_log(self.debug_path)
         if client is not None:
+            if self.search and not _accepts_search(client):
+                raise LoopError(
+                    "search=True needs a client whose parse() accepts a search keyword. "
+                    "The built-in xai, openai, and anthropic clients do."
+                )
             self.provider = "custom"
             self.model = (model or os.environ.get("LOOPKIT_MODEL", "")).strip() or DEFAULT_MODEL
             self._client: ModelClient = client
@@ -115,6 +189,7 @@ class Loop:
                 api_key=api_key,
                 base_url=base_url,
                 max_output_tokens=output_tokens,
+                search=self.search,
             )
             self.provider = built.provider
             self.model = built.model
@@ -124,7 +199,10 @@ class Loop:
     def load(cls, path: str | Path | None = None, **overrides: object) -> Loop:
         """Build a loop from ``loopkit.toml``."""
 
-        project = load_project(path)
+        project = load_project(path, missing_ok=True)
+        knowledge: KnowledgeLike | None = project.knowledge
+        if knowledge is None:
+            knowledge = Knowledge.empty(project.note)
         instructions = _coerce_instructions(overrides.pop("instructions", project.instructions))
         model = overrides.pop("model", project.model)
         provider = overrides.pop("provider", project.provider)
@@ -133,8 +211,14 @@ class Loop:
         top_k = overrides.pop("top_k", project.top_k)
         check_mode = overrides.pop("check_mode", project.check_mode)
         response = overrides.pop("response", project.response)
+        search = overrides.pop("search", project.search)
+        if search is not None and not isinstance(search, bool):
+            raise LoopError("search must be true or false.")
+        auto_optimize = overrides.pop("auto_optimize", project.auto_optimize)
+        if auto_optimize is not None and not isinstance(auto_optimize, bool):
+            raise LoopError("auto_optimize must be true or false.")
         return cls(
-            project.knowledge,
+            knowledge,
             instructions,
             model=None if model is None else str(model),
             provider=None if provider is None else str(provider),
@@ -143,6 +227,8 @@ class Loop:
             top_k=_override_int(top_k, DEFAULT_TOP_K, "top_k"),
             check_mode=None if check_mode is None else str(check_mode),
             response=None if response is None else str(response),
+            search=search,
+            auto_optimize=auto_optimize,
             **overrides,  # type: ignore[arg-type]
         )
 
@@ -159,21 +245,53 @@ class Loop:
             top_k=self.top_k,
             budget=self.context_budget,
         )
-        self._say(
-            f"{len(self.knowledge.passages)} passages loaded, {len(retrieval.passages)} sent to the model"
-        )
-        if retrieval.is_weak:
-            self._say("no lexical overlap; the drafter is told not to stretch a passage")
+        if self.mode == "open":
+            self._say("open mode: no passages; the model answers from its own knowledge" + (" and web search" if self.search else ""))
+        else:
+            self._say(
+                f"{len(self.knowledge.passages)} passages loaded, {len(retrieval.passages)} sent to the model"
+            )
+            if retrieval.is_weak:
+                self._say("no lexical overlap; the drafter is told not to stretch a passage")
         known = {passage.id: passage for passage in retrieval.passages}
         checks: list[Check] = []
         previous: Draft | None = None
         feedback: str | None = None
+        self._calls = 0
+        block(
+            "ASK",
+            ("TASK", question),
+            ("INSTRUCTIONS", [f"{n}. {text}" for n, text in enumerate(self.instructions, start=1)]),
+            (
+                "RETRIEVAL",
+                {
+                    "passages_loaded": len(self.knowledge.passages),
+                    "passages_sent": [
+                        {"id": p.id, "source": p.source, "heading": p.heading, "chars": len(p.text)}
+                        for p in retrieval.passages
+                    ],
+                    "weak_match": retrieval.is_weak,
+                    "knowledge_warnings": list(self.knowledge.warnings),
+                },
+            ),
+            meta={
+                "provider": self.provider,
+                "model": self.model,
+                "mode": self.mode,
+                "search": self.search,
+                "auto_optimize": self.auto_optimize,
+                "check_mode": self.check_mode,
+                "response": self.response,
+                "max_turns": self.max_turns,
+            },
+        )
+        role = self._optimize(question, retrieval.passages) if self.auto_optimize else ""
 
         for turn in range(1, self.max_turns + 1):
             self._say(f"turn {turn}: draft")
             draft = self._step(
                 stage=f"draft (turn {turn})",
-                system_text=DRAFT_SYSTEM,
+                system_text=with_role(role, draft_system(self.mode, search=self.search)),
                 user_text=draft_prompt(
                     instructions=self.instructions,
                     task=question,
@@ -182,29 +300,111 @@ class Loop:
                     previous=previous,
                     feedback=feedback,
                     response=self.response,
+                    mode=self.mode,
                 ),
                 schema=Draft,
+                search=self.search,
             )
-            audit = self._audit(turn, question, retrieval.passages, draft)
+            audit = self._audit(turn, question, retrieval.passages, draft, role)
             unknown = [cited for cited in citation_ids(draft) if cited not in known]
-            problem, judged = _revision_problem(draft, audit, unknown, self.instructions)
+            problem, judged = _revision_problem(draft, audit, unknown, self.instructions, self.mode)
             checks.append(_record(turn, audit, problem, unknown, judged))
             missed = [str(item.number) for item in judged if not item.followed]
             if missed:
                 self._say("instructions not followed: " + ", ".join(missed))
             if problem is None:
+                decision = "passed"
+            elif turn == self.max_turns:
+                decision = "max_turns"
+            else:
+                decision = "revise"
+            block(
+                f"TURN {turn} DECISION: {decision}",
+                ("DRAFT", draft.answer),
+                (
+                    "INSTRUCTION VERDICTS",
+                    [
+                        {"number": item.number, "followed": item.followed, "instruction": item.instruction, "note": item.note}
+                        for item in judged
+                    ],
+                ),
+                (
+                    "GROUNDING",
+                    {
+                        "grounded": audit.grounded,
+                        "revise": audit.revise,
+                        "notes": audit.notes,
+                        "gaps": list(audit.gaps),
+                        "unknown_citations": unknown,
+                    },
+                ),
+                ("REVISION NOTES SENT TO NEXT DRAFT", problem if decision == "revise" else "(none)"),
+                meta={"turn": turn, "of": self.max_turns, "model_calls_so_far": self._calls},
+            )
+            if decision == "passed":
                 self._say("stop: passed")
-                return _finish(draft, known, checks, turn, "passed", self.response)
-            if turn == self.max_turns:
+                answer = _finish(draft, known, checks, turn, "passed", self.response, self.mode, role)
+                self._log_answer(answer)
+                return answer
+            if decision == "max_turns":
                 self._say("stop: max turns")
-                return _finish(draft, known, checks, turn, "max_turns", self.response)
+                answer = _finish(draft, known, checks, turn, "max_turns", self.response, self.mode, role)
+                self._log_answer(answer)
+                return answer
             self._say("revise")
             previous = draft
             feedback = problem
 
         raise LoopError("The loop ended without an answer.")
 
-    def _audit(self, turn: int, task: str, passages: Sequence[Passage], draft: Draft) -> DraftCheck:
+    def _optimize(self, task: str, passages: Sequence[Passage]) -> str:
+        """One call before the loop: the role the model should take for this task.
+
+        A failure here is logged and the loop goes on without a role, so a
+        quality step cannot by itself stop an answer.
+        """
+
+        self._say("optimize: writing the role for this task")
+        try:
+            result = self._step(
+                stage="optimize",
+                system_text=OPTIMIZE_SYSTEM,
+                user_text=optimize_prompt(
+                    task=task,
+                    instructions=self.instructions,
+                    passages=passages,
+                    mode=self.mode,
+                    response=self.response,
+                ),
+                schema=RolePrefix,
+            )
+        except LoopError as exc:
+            logger.warning("optimize step failed, continuing without a role: %s", exc)
+            self._say(f"optimize failed, continuing without a role: {exc}")
+            return ""
+        role = " ".join(result.role.split())
+        if not role:
+            self._say("optimize returned no role")
+            return ""
+        shown = role if len(role) <= 160 else role[:157] + "..."
+        self._say(f"role: {shown}")
+        return role
+
+    def _log_answer(self, answer: Answer) -> None:
+        block(
+            "ANSWER",
+            ("ROLE", answer.role or "(none)"),
+            ("TEXT", answer.text),
+            ("CITATIONS", [f"[{c.id}] {c.source}" + (f" — {c.heading}" if c.heading else "") for c in answer.citations]),
+            meta={
+                "mode": answer.mode,
+                "stopped_reason": answer.stopped_reason,
+                "turns": answer.turns,
+                "model_calls": self._calls,
+            },
+        )
+
+    def _audit(self, turn: int, task: str, passages: Sequence[Passage], draft: Draft, role: str = "") -> DraftCheck:
         """Check the draft.
 
         ``each`` asks about one instruction per call, then checks grounding
@@ -215,15 +415,17 @@ class Loop:
             self._say(f"turn {turn}: check")
             return self._step(
                 stage=f"check (turn {turn})",
-                system_text=CHECK_SYSTEM,
+                system_text=with_role(role, check_system(self.mode, search=self.search)),
                 user_text=check_prompt(
                     instructions=self.instructions,
                     task=task,
                     passages=passages,
                     draft=draft,
                     response=self.response,
+                    mode=self.mode,
                 ),
                 schema=DraftCheck,
+                search=self.search,
             )
 
         verdicts: list[InstructionVerdict] = []
@@ -231,23 +433,26 @@ class Loop:
             self._say(f"turn {turn}: check instruction {number}")
             one = self._step(
                 stage=f"check instruction {number} (turn {turn})",
-                system_text=CHECK_ONE_SYSTEM,
+                system_text=with_role(role, check_one_system(self.mode)),
                 user_text=check_one_prompt(
                     number=number,
                     instruction=instruction,
                     task=task,
                     passages=passages,
                     draft=draft,
+                    mode=self.mode,
                 ),
                 schema=OneCheck,
             )
             verdicts.append(InstructionVerdict(number=number, followed=one.followed, note=one.note))
-        self._say(f"turn {turn}: check grounding")
+        review = "accuracy" if self.mode == "open" else "grounding"
+        self._say(f"turn {turn}: check {review}")
         ground = self._step(
-            stage=f"check grounding (turn {turn})",
-            system_text=GROUND_SYSTEM,
-            user_text=ground_prompt(task=task, passages=passages, draft=draft),
+            stage=f"check {review} (turn {turn})",
+            system_text=with_role(role, review_system(self.mode, search=self.search)),
+            user_text=ground_prompt(task=task, passages=passages, draft=draft, mode=self.mode),
             schema=GroundingCheck,
+            search=self.search,
         )
         return DraftCheck(
             instructions=verdicts,
@@ -257,18 +462,79 @@ class Loop:
             gaps=list(ground.gaps),
         )
 
-    def _step(self, *, stage: str, system_text: str, user_text: str, schema: type[T]) -> T:
+    def _step(
+        self,
+        *,
+        stage: str,
+        system_text: str,
+        user_text: str,
+        schema: type[T],
+        search: bool = False,
+    ) -> T:
+        self._calls += 1
+        number = self._calls
+        block(
+            f"CALL {number}: {stage}",
+            ("SYSTEM PROMPT", system_text),
+            ("USER PROMPT", user_text),
+            meta={"schema": schema.__name__, "provider": self.provider, "model": self.model, "search": search},
+        )
+        started = time.monotonic()
         try:
-            parsed = self._client.parse(system_text=system_text, user_text=user_text, schema=schema)
-        except LoopError:
-            raise
+            if search:
+                parsed = self._client.parse(  # type: ignore[call-arg]
+                    system_text=system_text, user_text=user_text, schema=schema, search=True
+                )
+            else:
+                parsed = self._client.parse(system_text=system_text, user_text=user_text, schema=schema)
         except Exception as exc:
+            self._log_result(number, stage, schema, started, parsed=None, error=exc)
+            if isinstance(exc, LoopError):
+                raise
             raise LoopError(f"The model call failed during {stage}: {exc}") from exc
         if not isinstance(parsed, schema):
-            raise LoopError(
+            error = LoopError(
                 f"The model returned {type(parsed).__name__} during {stage}, expected {schema.__name__}."
             )
+            self._log_result(number, stage, schema, started, parsed=parsed, error=error)
+            raise error
+        self._log_result(number, stage, schema, started, parsed=parsed, error=None)
         return parsed
+
+    def _log_result(
+        self,
+        number: int,
+        stage: str,
+        schema: type[object],
+        started: float,
+        *,
+        parsed: object,
+        error: Exception | None,
+    ) -> None:
+        if not logger.isEnabledFor(10):  # logging.DEBUG
+            return
+        last = getattr(self._client, "last_call", None)
+        record = last if isinstance(last, dict) else {}
+        sections: list[tuple[str, object]] = []
+        if record.get("request") is not None:
+            request = dict(cast(Mapping[str, object], record["request"]))
+            # The prompts are already in the CALL block, and the JSON schema is
+            # the same on every call of a stage. Keep the rest of the request.
+            for key in ("input", "messages", "system", "instructions"):
+                request.pop(key, None)
+            sections.append(("REQUEST PARAMETERS", _compact_schema(request, schema.__name__)))
+        sections.append(("RAW MODEL TEXT", record.get("raw_text")))
+        if record.get("response") is not None:
+            sections.append(("RAW RESPONSE BODY", record["response"]))
+        if error is None:
+            sections.append(("PARSED", parsed))
+        else:
+            sections.append(("ERROR", f"{type(error).__name__}: {error}"))
+        block(
+            f"RESULT {number}: {stage} -> {'error' if error else 'ok'}",
+            *sections,
+            meta={"schema": schema.__name__, "seconds": time.monotonic() - started},
+        )
 
     def _say(self, message: str) -> None:
         if self.trace:
@@ -344,8 +610,28 @@ def _choice(value: object, default: str, name: str, allowed: tuple[str, ...]) ->
     return cleaned
 
 
-def _env_flag(name: str) -> bool:
-    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+def _accepts_search(client: object) -> bool:
+    import inspect
+
+    parse = getattr(client, "parse", None)
+    if parse is None:
+        return False
+    try:
+        parameters = inspect.signature(parse).parameters
+    except (TypeError, ValueError):
+        return True
+    return "search" in parameters or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values())
+
+
+def _env_flag(name: str, *, default: bool = False) -> bool:
+    raw = os.environ.get(name, "").strip().lower()
+    if not raw:
+        return default
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return default
 
 
 def _override_int(value: object, default: int, name: str) -> int:
@@ -361,6 +647,7 @@ def _revision_problem(
     audit: DraftCheck,
     unknown: list[str],
     instructions: Sequence[str],
+    mode: str = "knowledge",
 ) -> tuple[str | None, tuple[InstructionCheck, ...]]:
     judged, instruction_problems = _judge_instructions(instructions, audit.instructions)
     problems: list[str] = []
@@ -368,9 +655,14 @@ def _revision_problem(
         problems.append("The draft was empty. Write the answer the user should read.")
     if unknown:
         listed = ", ".join(unknown)
-        problems.append(
-            f"These cited ids are not in the passages: {listed}. Cite only the ids you were given."
-        )
+        if mode == "open":
+            problems.append(
+                f"Remove the bracketed reference markers ({listed}). They do not point to anything the reader can see."
+            )
+        else:
+            problems.append(
+                f"These cited ids are not in the passages: {listed}. Cite only the ids you were given."
+            )
     problems.extend(instruction_problems)
     # ``revise`` is the auditor's stop bit. Any instruction that was not followed,
     # and a grounding miss, also send the draft back.
@@ -386,6 +678,8 @@ def _revision_problem(
         if not problems:
             problems.append(
                 "The draft does not follow the instructions or is not grounded in the passages."
+                if mode != "open"
+                else "The draft does not follow the instructions or contains claims the check believes are wrong."
             )
     if not problems:
         return None, judged
@@ -432,6 +726,23 @@ def _judge_instructions(
     return tuple(judged), problems
 
 
+def _compact_schema(node: object, name: str) -> object:
+    """Replace any nested ``schema`` object with a one-line stand-in."""
+
+    if isinstance(node, dict):
+        out: dict[str, object] = {}
+        for key, value in node.items():
+            if key == "schema" and isinstance(value, dict):
+                count = len(value.get("properties", {})) if isinstance(value.get("properties"), dict) else 0
+                out[key] = f"<JSON schema for {name}: {count} required properties, additionalProperties=false>"
+            else:
+                out[key] = _compact_schema(value, name)
+        return out
+    if isinstance(node, list):
+        return [_compact_schema(item, name) for item in node]
+    return node
+
+
 def _record(
     turn: int,
     audit: DraftCheck,
@@ -458,6 +769,8 @@ def _finish(
     turns: int,
     reason: StoppedReason,
     response: ResponseKind,
+    mode: str = "knowledge",
+    role: str = "",
 ) -> Answer:
     citations: list[Citation] = []
     for cited in citation_ids(draft):
@@ -470,6 +783,8 @@ def _finish(
     return Answer(
         text=draft.answer.strip(),
         response=response,
+        mode=cast(Literal["knowledge", "open"], mode),
+        role=role,
         citations=tuple(citations),
         checks=tuple(checks),
         turns=turns,

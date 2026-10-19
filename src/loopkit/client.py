@@ -11,6 +11,11 @@ from dataclasses import dataclass
 
 from loopkit.errors import LoopError
 from loopkit.httpapi import AnthropicClient, OpenAIClient, OpenAICompatibleClient, is_local_base_url
+from loopkit.retry import Transient, retry_call
+
+# gRPC status names the xAI SDK raises when the service is busy or broke
+# on its side. These are worth another attempt; anything else is not.
+_GRPC_TRANSIENT = {"RESOURCE_EXHAUSTED", "UNAVAILABLE", "INTERNAL", "ABORTED", "DEADLINE_EXCEEDED"}
 
 # grok-4.7 is a reasoning model. The xAI text guide uses a one-hour client timeout.
 DEFAULT_TIMEOUT_SECONDS = 3600
@@ -70,6 +75,7 @@ class XAIClient:
         api_key: str | None = None,
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
         max_output_tokens: int | None = None,
+        search: bool = False,
     ) -> None:
         if api_key is None:
             api_key = os.environ.get("XAI_API_KEY", "")
@@ -81,24 +87,66 @@ class XAIClient:
         self.model = model
         self._max_output_tokens = max_output_tokens
         self._sdk = Client(api_key=api_key, timeout=timeout)
+        self.search = search
+        self.last_call: dict[str, object] | None = None
 
-    def parse(self, *, system_text: str, user_text: str, schema: type[object]) -> object:
+    def parse(
+        self, *, system_text: str, user_text: str, schema: type[object], search: bool = False
+    ) -> object:
         from xai_sdk.chat import system, user
 
         # Knowledge bases are often private. Do not store the prompt on the server.
         # The request itself is still sent to the API.
-        if self._max_output_tokens is None:
-            chat = self._sdk.chat.create(model=self.model, store_messages=False)
-        else:
-            chat = self._sdk.chat.create(
-                model=self.model,
-                store_messages=False,
-                max_tokens=self._max_output_tokens,
-            )
-        chat.append(system(system_text))
-        chat.append(user(user_text))
-        _response, parsed = chat.parse(schema)
-        return parsed
+        params: dict[str, object] = {"model": self.model, "store_messages": False}
+        if self._max_output_tokens is not None:
+            params["max_tokens"] = self._max_output_tokens
+        record: dict[str, object] = {"request": dict(params), "response": None, "raw_text": None}
+        if search:
+            record["request"] = {**params, "tools": ["web_search"]}
+        self.last_call = record
+
+        def attempt() -> object:
+            if search:
+                from xai_sdk.tools import web_search
+
+                chat = self._sdk.chat.create(**params, tools=[web_search()])
+            else:
+                chat = self._sdk.chat.create(**params)
+            chat.append(system(system_text))
+            chat.append(user(user_text))
+            try:
+                response, parsed = chat.parse(schema)
+            except Exception as exc:
+                status = _grpc_status(exc)
+                if status in _GRPC_TRANSIENT:
+                    raise Transient(f"xAI {status}: {_brief(exc)}", cause=exc) from exc
+                raise
+            record["raw_text"] = getattr(response, "content", None)
+            record["response"] = {
+                name: getattr(response, name)
+                for name in ("id", "finish_reason", "usage")
+                if getattr(response, name, None) is not None
+            }
+            return parsed
+
+        return retry_call(attempt, what=f"xAI {self.model}")
+
+
+def _grpc_status(exc: Exception) -> str:
+    code = getattr(exc, "code", None)
+    if not callable(code):
+        return ""
+    try:
+        return str(getattr(code(), "name", ""))
+    except Exception:
+        return ""
+
+
+def _brief(exc: Exception) -> str:
+    details = getattr(exc, "details", None)
+    text = details() if callable(details) else str(exc)
+    text = str(text).strip().replace("\n", " ")
+    return text[:200] + ("..." if len(text) > 200 else "")
 
 
 def make_client(
@@ -109,6 +157,7 @@ def make_client(
     base_url: str | None = None,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     max_output_tokens: int | None = None,
+    search: bool = False,
 ) -> XAIClient | OpenAIClient | AnthropicClient | OpenAICompatibleClient:
     choice = resolve_provider(provider, base_url=base_url)
     chosen_model = _choose_model(choice, model)
@@ -119,7 +168,9 @@ def make_client(
                 "The xAI provider uses the xAI SDK. "
                 "For a custom base URL, set provider to 'compatible'."
             )
-        return XAIClient(model=chosen_model, api_key=key, timeout=timeout, max_output_tokens=max_output_tokens)
+        return XAIClient(
+            model=chosen_model, api_key=key, timeout=timeout, max_output_tokens=max_output_tokens, search=search
+        )
     if choice.name == "openai":
         return OpenAIClient(
             model=chosen_model,
@@ -127,6 +178,7 @@ def make_client(
             base_url=choice.base_url or _DEFAULT_BASE["openai"],
             timeout=timeout,
             max_output_tokens=max_output_tokens,
+            search=search,
         )
     if choice.name == "anthropic":
         return AnthropicClient(
@@ -135,9 +187,15 @@ def make_client(
             base_url=choice.base_url or _DEFAULT_BASE["anthropic"],
             timeout=timeout,
             max_output_tokens=max_output_tokens,
+            search=search,
         )
     if not choice.base_url:
         raise LoopError("provider 'compatible' needs a base_url, for example http://localhost:11434/v1.")
+    if search:
+        raise LoopError(
+            "search needs a provider with a web search tool: xai, openai, or anthropic. "
+            "The 'compatible' provider sends plain chat completions."
+        )
     return OpenAICompatibleClient(
         model=chosen_model,
         api_key=key,
