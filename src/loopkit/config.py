@@ -8,6 +8,7 @@ file. It never holds an API key. ``loopkit init`` writes a starter copy.
 
 from __future__ import annotations
 
+import json
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,9 +27,19 @@ ALLOWED_KEYS = {
     "response",
     "search",
     "auto_optimize",
+    "token_budget",
+    "token_budget_mode",
+    "response_length",
+    "output_format",
+    "output_schema",
+    "check_model",
+    "check_provider",
+    "check_base_url",
 }
 CHECK_MODES = ("each", "all")
 RESPONSES = ("normal", "book")
+TOKEN_BUDGET_MODES = ("soft", "hard")
+OUTPUT_FORMATS = ("text", "json")
 FILENAME = "loopkit.toml"
 
 
@@ -54,6 +65,14 @@ class Project:
     note: str | None = None
     search: bool | None = None
     auto_optimize: bool | None = None
+    token_budget: int | None = None
+    token_budget_mode: str | None = None
+    response_length: int | str | None = None
+    output_format: str | None = None
+    output_schema: dict[str, object] | list[object] | None = None
+    check_model: str | None = None
+    check_provider: str | None = None
+    check_base_url: str | None = None
 
 
 def load_project(path: str | Path | None = None, *, missing_ok: bool = False) -> Project:
@@ -117,6 +136,18 @@ def load_project(path: str | Path | None = None, *, missing_ok: bool = False) ->
         note=note,
         search=_optional_bool(data.get("search"), "search", file.name),
         auto_optimize=_optional_bool(data.get("auto_optimize"), "auto_optimize", file.name),
+        token_budget=_optional_int(data.get("token_budget"), "token_budget", file.name),
+        token_budget_mode=_optional_choice(
+            data.get("token_budget_mode"), "token_budget_mode", file.name, TOKEN_BUDGET_MODES
+        ),
+        response_length=_response_length(data.get("response_length"), file.name),
+        output_format=_optional_choice(
+            data.get("output_format"), "output_format", file.name, OUTPUT_FORMATS
+        ),
+        output_schema=_output_schema(data.get("output_schema"), base, file.name),
+        check_model=_optional_str(data.get("check_model"), "check_model", file.name),
+        check_provider=_optional_str(data.get("check_provider"), "check_provider", file.name),
+        check_base_url=_optional_str(data.get("check_base_url"), "check_base_url", file.name),
     )
 
 
@@ -201,6 +232,51 @@ def _optional_bool(value: object, name: str, filename: str) -> bool | None:
     if not isinstance(value, bool):
         raise LoopError(f"{name} in {filename} must be true or false.")
     return value
+
+
+def _response_length(value: object, filename: str) -> int | str | None:
+    """``"auto"`` or a character count of at least 1."""
+
+    if value is None:
+        return None
+    if isinstance(value, str) and value.strip().lower() == "auto":
+        return "auto"
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise LoopError(
+            f'response_length in {filename} must be "auto" or an integer of at least 1 (characters).'
+        )
+    return value
+
+
+def _output_schema(
+    value: object, base: Path, filename: str
+) -> dict[str, object] | list[object] | None:
+    """A table in the file, used as is, or the path of a JSON file to read.
+
+    Either may be a JSON Schema or an example of the output; the loop tells
+    them apart.
+    """
+
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        path = _resolve(value.strip(), base)
+        if not path.is_file():
+            raise LoopError(f"output_schema in {filename} names {path}, which is not a file.")
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise LoopError(f"output_schema file {path} is not valid JSON: {exc.msg}.") from None
+        except OSError as exc:
+            raise LoopError(f"Could not read output_schema file {path}: {exc}") from None
+        if not isinstance(loaded, (dict, list)):
+            raise LoopError(f"output_schema file {path} must hold a JSON object or array.")
+        return loaded
+    raise LoopError(
+        f"output_schema in {filename} must be a table (the schema or an example) or the path of a JSON file."
+    )
 
 
 def _optional_int(value: object, name: str, filename: str) -> int | None:

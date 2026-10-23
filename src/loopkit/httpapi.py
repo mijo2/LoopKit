@@ -19,6 +19,7 @@ from pydantic import BaseModel, ValidationError
 
 from loopkit.errors import LoopError
 from loopkit.retry import RETRY_STATUSES, Transient, parse_retry_after, retry_call
+from loopkit.tokens import usage_from_response
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -84,9 +85,10 @@ ANTHROPIC_SEARCH_TOOL: dict[str, object] = {"type": "web_search_20250305", "name
 class _HttpClient:
     """What the three HTTP clients share: one POST, recorded for the debug log.
 
-    ``last_call`` holds the request payload, the response body, and the text
-    that was parsed, for the most recent call. The loop reads it when writing
-    the debug log, including when the call failed part way.
+    ``last_call`` holds the request payload, the response body, the text
+    that was parsed, and the token usage the server reported, for the most
+    recent call. The loop reads it when writing the debug log, including
+    when the call failed part way, and when counting tokens against a budget.
     """
 
     last_call: dict[str, object] | None = None
@@ -101,10 +103,17 @@ class _HttpClient:
         extract: Callable[[dict[str, object]], list[str]],
         schema: type[T],
     ) -> T:
-        record: dict[str, object] = {"url": url, "request": payload, "response": None, "raw_text": None}
+        record: dict[str, object] = {
+            "url": url,
+            "request": payload,
+            "response": None,
+            "raw_text": None,
+            "usage": None,
+        }
         self.last_call = record
         body = post_json(url, payload, headers=headers, timeout=self._timeout)
         record["response"] = body
+        record["usage"] = usage_from_response(body)
         parts = extract(body)
         record["raw_text"] = "\n".join(parts)
         return _validate_parts(schema, parts)
@@ -129,6 +138,7 @@ class OpenAICompatibleClient(_HttpClient):
         self._url = _join(base_url, "chat/completions")
         self._timeout = timeout
         self._max_output_tokens = max_output_tokens
+        self.max_output_tokens = max_output_tokens
 
     def parse(self, *, system_text: str, user_text: str, schema: type[T], search: bool = False) -> T:
         if search:
@@ -182,6 +192,7 @@ class OpenAIClient(_HttpClient):
         self._url = _join(base_url, "responses")
         self._timeout = timeout
         self._max_output_tokens = max_output_tokens
+        self.max_output_tokens = max_output_tokens
         self.search = search
 
     def parse(self, *, system_text: str, user_text: str, schema: type[T], search: bool = False) -> T:
@@ -237,6 +248,7 @@ class AnthropicClient(_HttpClient):
         self._url = _anthropic_url(base_url)
         self._timeout = timeout
         self._max_output_tokens = 8192 if max_output_tokens is None else max_output_tokens
+        self.max_output_tokens: int | None = self._max_output_tokens
         self.search = search
 
     def parse(self, *, system_text: str, user_text: str, schema: type[T], search: bool = False) -> T:

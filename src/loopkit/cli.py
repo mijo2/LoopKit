@@ -13,6 +13,7 @@ from loopkit import __version__
 from loopkit.debuglog import DEFAULT_DEBUG_FILE, logger
 from loopkit.errors import LoopError, LoopWarning
 from loopkit.loop import DEFAULT_MODEL, Loop, ModelClient
+from loopkit.models import Answer
 from loopkit.serve import serve
 
 SAMPLE_KNOWLEDGE = """\
@@ -47,12 +48,20 @@ knowledge = "knowledge"
 # provider = "openai"
 # model = "gpt-6.1-sol"
 # base_url = "http://localhost:11434/v1"
+# check_model = "gpt-6.1-mini"  # a second model for the checks; the drafts stay on model
+# check_provider = "anthropic"  # its provider, when it is not the draft's
+# check_base_url = "http://localhost:11434/v1"
 # max_turns = 3
 # top_k = 8
 # check_mode = "each"  # or "all"
 # response = "normal"  # or "book"
 # search = true        # provider web search for the draft and the audit
 # auto_optimize = false  # skip the role-writing call before the loop
+# token_budget = 20000  # cap on tokens per ask; the loop stops early when reached
+# token_budget_mode = "soft"  # soft: a turn at a time, always a checked answer. hard: a call at a time
+# response_length = "auto"  # or a number of characters; each draft is held to it
+# output_format = "json"    # one JSON document held to output_schema, instead of text
+# output_schema = "schema.json"  # a JSON Schema or an example of the output; a file path or a table
 """
 
 
@@ -89,7 +98,51 @@ def main(argv: list[str] | None = None, *, client: ModelClient | None = None) ->
     shared.add_argument(
         "--base-url", help="OpenAI-compatible base URL, for example http://localhost:11434/v1."
     )
+    shared.add_argument(
+        "--check-model",
+        help=(
+            "A second model for the checks: each instruction check and the grounding or accuracy "
+            "audit. Drafts and the optimize step stay on --model. On its own, the same provider "
+            "as --model. Same as LOOPKIT_CHECK_MODEL or check_model in loopkit.toml."
+        ),
+    )
+    shared.add_argument(
+        "--check-provider",
+        help=(
+            "The provider for --check-model when it is not the draft's: xai, openai, anthropic, or "
+            "compatible. Its key comes from that provider's environment variable. Same as "
+            "LOOPKIT_CHECK_PROVIDER."
+        ),
+    )
+    shared.add_argument(
+        "--check-base-url",
+        help="An OpenAI-compatible server for the checks; needs --check-model. Same as LOOPKIT_CHECK_BASE_URL.",
+    )
     shared.add_argument("--max-turns", type=int, help="Draft and check rounds. Default: 3.")
+    shared.add_argument(
+        "--token-budget",
+        type=int,
+        metavar="N",
+        help=(
+            "Cap on the tokens one ask may spend across all of its model calls, input and output "
+            "together. When it runs out the loop stops and prints what it has "
+            "(stopped_reason: token_budget). Same as LOOPKIT_TOKEN_BUDGET=N or token_budget = N "
+            "in loopkit.toml. Default: no cap."
+        ),
+    )
+    shared.add_argument(
+        "--token-budget-mode",
+        choices=("soft", "hard"),
+        help=(
+            "How --token-budget is held. soft estimates a whole turn before starting it and lets a "
+            "started turn finish, so the answer is always a checked draft and the total can end over "
+            "the cap by up to one turn; the first turn always runs. hard estimates every call, the "
+            "first draft included, makes none that would not fit, and stops the moment the cap is "
+            "exceeded, printing the draft as it stands with the verdicts reached so far, or nothing "
+            "when even the first draft would not fit. Same as LOOPKIT_TOKEN_BUDGET_MODE or "
+            "token_budget_mode in loopkit.toml. Default: soft."
+        ),
+    )
     shared.add_argument(
         "--check-mode",
         choices=("each", "all"),
@@ -114,6 +167,36 @@ def main(argv: list[str] | None = None, *, client: ModelClient | None = None) ->
         help=(
             "Skip the optimize step. By default one call before the loop writes a role for the task "
             "(\"You are a ...\") that prefixes every draft and check. Same as LOOPKIT_AUTO_OPTIMIZE=0."
+        ),
+    )
+    shared.add_argument(
+        "--response-length",
+        metavar="auto|N",
+        help=(
+            "Control the length of the answer. auto asks each draft to keep under the length the "
+            "estimate step expects for the task; N asks for N characters. Either is held under what "
+            "the model returns in one call. The length is measured in code after every draft, and a "
+            "draft over it is revised. Same as LOOPKIT_RESPONSE_LENGTH or response_length in "
+            "loopkit.toml. Default: the length is left to the instructions."
+        ),
+    )
+    shared.add_argument(
+        "--output-format",
+        choices=("text", "json"),
+        help=(
+            "text is prose, the default. json asks for one JSON document held to --output-schema: "
+            "every draft is parsed and validated in code, and one that does not follow the schema "
+            "is revised with the exact problems. Same as output_format in loopkit.toml."
+        ),
+    )
+    shared.add_argument(
+        "--output-schema",
+        metavar="FILE|JSON",
+        help=(
+            "The shape for --output-format json: a JSON Schema, or an example of the output from "
+            "which a schema is inferred (every key required, no others, types from the values). "
+            "A file path or inline JSON. Implies --output-format json. Same as output_schema in "
+            "loopkit.toml."
         ),
     )
     shared.add_argument(
@@ -179,8 +262,10 @@ def main(argv: list[str] | None = None, *, client: ModelClient | None = None) ->
             answer = loop.ask(task)
             if args.json:
                 print(json.dumps(answer.to_dict(), ensure_ascii=False, indent=2))
-            else:
+            elif answer.text:
                 print(answer.text)
+            else:
+                print("loopkit: no answer: " + _why_empty(answer), file=sys.stderr)
             return 0
         if args.command == "serve":
             loop = _loop_from_args(args, client, trace=True if args.trace else None)
@@ -209,8 +294,24 @@ def _loop_from_args(
         kwargs["provider"] = args.provider
     if args.base_url:
         kwargs["base_url"] = args.base_url
+    if args.check_model:
+        kwargs["check_model"] = args.check_model
+    if args.check_provider:
+        kwargs["check_provider"] = args.check_provider
+    if args.check_base_url:
+        kwargs["check_base_url"] = args.check_base_url
     if args.max_turns is not None:
         kwargs["max_turns"] = args.max_turns
+    if args.token_budget is not None:
+        kwargs["token_budget"] = args.token_budget
+    if args.token_budget_mode:
+        kwargs["token_budget_mode"] = args.token_budget_mode
+    if args.response_length:
+        kwargs["response_length"] = args.response_length
+    if args.output_format:
+        kwargs["output_format"] = args.output_format
+    if args.output_schema:
+        kwargs["output_schema"] = _output_schema(args.output_schema)
     if args.check_mode:
         kwargs["check_mode"] = args.check_mode
     if args.response:
@@ -230,6 +331,22 @@ def _loop_from_args(
     if args.knowledge:
         return Loop(args.knowledge, **kwargs)  # type: ignore[arg-type]
     return Loop.load(**kwargs)
+
+
+def _output_schema(value: str) -> str:
+    """The schema argument: the contents of a file when it names one, else the text itself."""
+
+    text = value.strip()
+    path = Path(text)
+    if not text.startswith(("{", "[")) and path.is_file():
+        return path.read_text(encoding="utf-8")
+    return text
+
+
+def _why_empty(answer: Answer) -> str:
+    if answer.stopped_reason == "token_budget" and answer.turns == 0:
+        return "the token budget was too small for the first draft."
+    return "the model returned an empty draft."
 
 
 def _instructions(args: argparse.Namespace) -> list[str] | None:

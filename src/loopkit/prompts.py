@@ -67,6 +67,30 @@ BOOK_REQUEST = (
     "Do not shorten it to a summary unless an instruction says to."
 )
 
+
+def length_rule(chars: int, words: int) -> str:
+    """The system-prompt rule that tells the drafter how long the answer may be."""
+
+    return (
+        f"- RESPONSE LIMIT: keep the answer under {chars:,} characters, about {words:,} words. "
+        "Say what the task needs within that limit. Do not pad to reach it."
+    )
+
+
+JSON_DRAFT_RULE = (
+    "- OUTPUT FORMAT: json. The answer is one JSON document and nothing else: no prose before or "
+    "after it, no code fence. It must follow the OUTPUT SCHEMA below exactly: every required key, "
+    "no key the schema does not list, each value of the type the schema gives. Name the passages "
+    "you used in cited_ids; put a [p12] marker inside the document only in a string value written "
+    "for a reader."
+)
+
+JSON_CHECK_RULE = (
+    "- The draft is a JSON document by design. Judge the instruction on the content of its values. "
+    "The JSON form itself is not a miss, and citations may be in the cited ids rather than inline."
+)
+
+
 CHECK_SYSTEM = """\
 You audit a draft. You do not rewrite it.
 
@@ -193,25 +217,50 @@ def with_role(role: str, system: str) -> str:
     return f"{cleaned}\n\n{system}" if cleaned else system
 
 
-def draft_system(mode: Mode, *, search: bool) -> str:
-    base = DRAFT_SYSTEM_OPEN if mode == "open" else DRAFT_SYSTEM
-    return _with_rule(base, SEARCH_DRAFT_RULE) if search else base
+def draft_system(
+    mode: Mode,
+    *,
+    search: bool,
+    length: tuple[int, int] | None = None,
+    output_schema: str | None = None,
+) -> str:
+    """The drafter's system prompt.
+
+    ``length`` is ``(characters, words)`` to keep the answer under.
+    ``output_schema`` is the rendered JSON schema the answer must follow;
+    with it the answer is a JSON document.
+    """
+
+    system = DRAFT_SYSTEM_OPEN if mode == "open" else DRAFT_SYSTEM
+    if search:
+        system = _with_rule(system, SEARCH_DRAFT_RULE)
+    if length is not None:
+        system = _with_rule(system, length_rule(*length))
+    if output_schema is not None:
+        system = _with_rule(system, JSON_DRAFT_RULE)
+        system = system.rstrip("\n") + "\n\nOUTPUT SCHEMA:\n" + output_schema.strip() + "\n"
+    return system
 
 
-def check_one_system(mode: Mode) -> str:
-    return CHECK_ONE_SYSTEM_OPEN if mode == "open" else CHECK_ONE_SYSTEM
+def check_one_system(mode: Mode, *, output: str = "text") -> str:
+    base = CHECK_ONE_SYSTEM_OPEN if mode == "open" else CHECK_ONE_SYSTEM
+    return _with_rule(base, JSON_CHECK_RULE) if output == "json" else base
 
 
-def check_system(mode: Mode, *, search: bool) -> str:
+def check_system(mode: Mode, *, search: bool, output: str = "text") -> str:
     base = CHECK_SYSTEM_OPEN if mode == "open" else CHECK_SYSTEM
-    return _with_rule(base, SEARCH_AUDIT_RULE) if search else base
+    if search:
+        base = _with_rule(base, SEARCH_AUDIT_RULE)
+    return _with_rule(base, JSON_CHECK_RULE) if output == "json" else base
 
 
-def review_system(mode: Mode, *, search: bool) -> str:
+def review_system(mode: Mode, *, search: bool, output: str = "text") -> str:
     """The non-instruction audit: grounding with passages, accuracy without."""
 
     base = REVIEW_SYSTEM_OPEN if mode == "open" else GROUND_SYSTEM
-    return _with_rule(base, SEARCH_AUDIT_RULE) if search else base
+    if search:
+        base = _with_rule(base, SEARCH_AUDIT_RULE)
+    return _with_rule(base, JSON_CHECK_RULE) if output == "json" else base
 
 
 def _with_rule(system: str, rule: str) -> str:

@@ -112,9 +112,14 @@ form.addEventListener("submit", async (event) => {
     answer.textContent = body.text;
     const turns = body.turns === 1 ? "1 turn" : body.turns + " turns";
     meta.hidden = false;
-    meta.textContent = body.stopped_reason === "passed"
+    const tokens = body.tokens && body.tokens.total
+      ? " " + body.tokens.total.toLocaleString() + " tokens."
+      : "";
+    meta.textContent = (body.stopped_reason === "passed"
       ? "Checked in " + turns + "."
-      : "Stopped after " + turns + ".";
+      : body.stopped_reason === "token_budget"
+        ? "Stopped after " + turns + ": token budget reached."
+        : "Stopped after " + turns + ".") + tokens;
     sources.replaceChildren();
     for (const citation of body.citations) {
       const item = document.createElement("li");
@@ -183,8 +188,17 @@ class _Handler(BaseHTTPRequestHandler):
         if not isinstance(payload, dict) or not isinstance(payload.get("task"), str):
             self._send(400, {"error": "Send a JSON object with a task string."})
             return
+        budget = payload.get("token_budget")
+        if budget is not None and (
+            isinstance(budget, bool) or not isinstance(budget, int) or budget < 1
+        ):
+            self._send(400, {"error": "token_budget must be an integer of at least 1."})
+            return
         try:
-            answer = self.loop.ask(payload["task"])
+            if budget is None:
+                answer = self.loop.ask(payload["task"])
+            else:
+                answer = self.loop.ask(payload["task"], token_budget=budget)
         except LoopError as exc:
             self._send(400, {"error": str(exc)})
             return

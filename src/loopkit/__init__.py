@@ -3,6 +3,7 @@
 from importlib.metadata import PackageNotFoundError, version
 
 from loopkit.errors import LoopError, LoopWarning
+from loopkit.estimate import EstimationStrategy
 from loopkit.knowledge import Knowledge, Passage
 from loopkit.client import DEFAULT_MODELS
 from loopkit.loop import (
@@ -16,7 +17,18 @@ from loopkit.loop import (
     ask,
     default_instructions,
 )
-from loopkit.models import Answer, Check, Citation, InstructionCheck, ResponseKind
+from loopkit.models import (
+    Answer,
+    Check,
+    Citation,
+    InstructionCheck,
+    LengthCheck,
+    OutputFormat,
+    ResponseKind,
+    StructureCheck,
+    TokenUsage,
+)
+from loopkit.tokens import estimate_tokens
 
 try:
     __version__ = version("loop-kit")
@@ -31,17 +43,23 @@ __all__ = [
     "Answer",
     "Check",
     "Citation",
+    "EstimationStrategy",
     "InstructionCheck",
     "Knowledge",
+    "LengthCheck",
     "Loop",
     "LoopError",
     "LoopWarning",
     "OPEN_BOOK_INSTRUCTIONS",
     "OPEN_INSTRUCTIONS",
+    "OutputFormat",
     "SEARCH_INSTRUCTIONS",
     "default_instructions",
     "Passage",
     "ResponseKind",
+    "StructureCheck",
+    "TokenUsage",
     "__version__",
     "ask",
+    "estimate_tokens",
 ]

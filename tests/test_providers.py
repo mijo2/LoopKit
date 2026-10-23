@@ -460,3 +460,115 @@ def test_no_text_reason_names_the_stop_reason(monkeypatch: pytest.MonkeyPatch) -
     loop = Loop(knowledge=POLICY, trace=False)
     with pytest.raises(LoopError, match="The model refused: I cannot help"):
         loop._client.parse(system_text="rules", user_text="task", schema=Draft)
+
+
+def _reported_usage(loop: Loop) -> object:
+    last = getattr(loop._client, "last_call", None)
+    assert isinstance(last, dict)
+    return last["usage"]
+
+
+def test_http_clients_record_reported_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every HTTP client puts the provider's token counts in ``last_call["usage"]``."""
+
+    from loopkit.tokens import Usage
+
+    _clear(monkeypatch)
+    check = OneCheck(followed=True, note="").model_dump_json()
+
+    _install(
+        monkeypatch,
+        {
+            "output": [{"type": "message", "content": [{"type": "output_text", "text": check}]}],
+            "usage": {"input_tokens": 321, "output_tokens": 12, "total_tokens": 333},
+        },
+    )
+    loop = Loop(knowledge=POLICY, api_key="sk-test", provider="openai", trace=False)
+    loop._client.parse(system_text="rules", user_text="task", schema=OneCheck)
+    assert _reported_usage(loop) == Usage(321, 12)
+
+    _install(
+        monkeypatch,
+        {
+            "content": [{"type": "text", "text": check}],
+            "usage": {"input_tokens": 200, "output_tokens": 9, "cache_read_input_tokens": 50},
+        },
+    )
+    loop = Loop(knowledge=POLICY, api_key="sk-ant", provider="anthropic", trace=False)
+    loop._client.parse(system_text="rules", user_text="task", schema=OneCheck)
+    assert _reported_usage(loop) == Usage(250, 9)
+
+    _install(
+        monkeypatch,
+        {
+            "choices": [{"message": {"content": check}}],
+            "usage": {"prompt_tokens": 80, "completion_tokens": 6, "total_tokens": 86},
+        },
+    )
+    loop = Loop(knowledge=POLICY, base_url="http://localhost:11434/v1", model="llama", trace=False)
+    loop._client.parse(system_text="rules", user_text="task", schema=OneCheck)
+    assert _reported_usage(loop) == Usage(80, 6)
+
+    # A server that reports nothing leaves usage unset; the loop then estimates.
+    _install(monkeypatch, {"choices": [{"message": {"content": check}}]})
+    loop._client.parse(system_text="rules", user_text="task", schema=OneCheck)
+    assert _reported_usage(loop) is None
+
+
+def test_reported_usage_reaches_the_answer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """End to end over a faked OpenAI-compatible server: the answer carries real counts."""
+
+    _clear(monkeypatch)
+    replies = iter(accepted("Fourteen days. [p1]", "p1"))
+
+    def fake_urlopen(request: urllib.request.Request, timeout: float | None = None) -> _Body:
+        reply = next(replies)
+        return _Body(
+            {
+                "choices": [{"message": {"content": reply.model_dump_json()}}],
+                "usage": {"prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110},
+            }
+        )
+
+    monkeypatch.setattr("loopkit.httpapi.urllib.request.urlopen", fake_urlopen)
+    loop = Loop(knowledge=POLICY, base_url="http://localhost:11434/v1", model="llama", trace=False)
+    answer = loop.ask("What is the refund window?", token_budget=50_000)
+    assert answer.stopped_reason == "passed"
+    assert answer.tokens.estimated is False
+    assert answer.tokens.calls == 6
+    assert answer.tokens.input_tokens == 600
+    assert answer.tokens.output_tokens == 60
+    assert answer.tokens.budget == 50_000
+
+
+def test_xai_client_records_sdk_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+    from loopkit.client import XAIClient
+    from loopkit.tokens import Usage
+
+    _clear(monkeypatch)
+    client = XAIClient(model="grok-test", api_key="xai-test")
+
+    class Sampling:
+        prompt_tokens = 640
+        completion_tokens = 25
+        reasoning_tokens = 300
+        total_tokens = 965
+
+    class Response:
+        content = '{"followed": true, "note": ""}'
+        id = "resp_2"
+        finish_reason = "stop"
+        usage = Sampling()
+
+    class FakeChat:
+        def append(self, message: object) -> None:
+            pass
+
+        def parse(self, shape: type[object]) -> tuple[object, object]:
+            return Response(), OneCheck(followed=True, note="")
+
+    monkeypatch.setattr(client._sdk.chat, "create", lambda **params: FakeChat())
+    client.parse(system_text="rules", user_text="task", schema=OneCheck)
+    assert client.last_call is not None
+    # Reasoning tokens are billed as output; the total says so.
+    assert client.last_call["usage"] == Usage(640, 325)

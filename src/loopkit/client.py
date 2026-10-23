@@ -18,6 +18,7 @@ from loopkit.httpapi import (
     is_local_base_url,
 )
 from loopkit.retry import Transient, retry_call
+from loopkit.tokens import usage_from_response
 
 # gRPC status names the xAI SDK raises when the service is busy or broke
 # on its side. These are worth another attempt; anything else is not.
@@ -58,7 +59,8 @@ _ALIASES = {
     "openai_compatible": "compatible",
 }
 
-_PROVIDER_NAMES = ("xai", "openai", "anthropic", "compatible")
+PROVIDER_NAMES = ("xai", "openai", "anthropic", "compatible")
+_PROVIDER_NAMES = PROVIDER_NAMES
 
 
 @dataclass(frozen=True)
@@ -98,6 +100,7 @@ class XAIClient:
 
         self.model = model
         self._max_output_tokens = max_output_tokens
+        self.max_output_tokens = max_output_tokens
         self._sdk = Client(api_key=api_key, timeout=timeout)
         self.search = search
         self.last_call: dict[str, object] | None = None
@@ -112,7 +115,12 @@ class XAIClient:
         params: dict[str, object] = {"model": self.model, "store_messages": False}
         if self._max_output_tokens is not None:
             params["max_tokens"] = self._max_output_tokens
-        record: dict[str, object] = {"request": dict(params), "response": None, "raw_text": None}
+        record: dict[str, object] = {
+            "request": dict(params),
+            "response": None,
+            "raw_text": None,
+            "usage": None,
+        }
         if search:
             record["request"] = {**params, "tools": ["web_search"]}
         self.last_call = record
@@ -134,6 +142,7 @@ class XAIClient:
                     raise Transient(f"xAI {status}: {_brief(exc)}", cause=exc) from exc
                 raise
             record["raw_text"] = getattr(response, "content", None)
+            record["usage"] = usage_from_response(getattr(response, "usage", None))
             record["response"] = {
                 name: getattr(response, name)
                 for name in ("id", "finish_reason", "usage")

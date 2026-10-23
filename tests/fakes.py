@@ -125,3 +125,27 @@ def audit(
         notes=notes,
         gaps=gaps or [],
     )
+
+
+class MeteredModel(ScriptedModel):
+    """A scripted model that reports token usage the way the provider clients do.
+
+    Every call is reported as ``input_tokens`` in and ``output_tokens`` out
+    through ``last_call["usage"]``, so a test can reason about the token
+    budget in round numbers.
+    """
+
+    def __init__(
+        self, replies: list[BaseModel], *, input_tokens: int = 100, output_tokens: int = 20
+    ) -> None:
+        super().__init__(replies)
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+        self.last_call: dict[str, object] | None = None
+
+    def parse(self, *, system_text: str, user_text: str, schema: type[T]) -> T:
+        reply = super().parse(system_text=system_text, user_text=user_text, schema=schema)
+        self.last_call = {
+            "usage": {"input_tokens": self.input_tokens, "output_tokens": self.output_tokens}
+        }
+        return reply
