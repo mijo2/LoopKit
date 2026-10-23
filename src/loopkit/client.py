@@ -14,7 +14,6 @@ from loopkit.httpapi import (
     AnthropicClient,
     OpenAIClient,
     OpenAICompatibleClient,
-    T,
     is_local_base_url,
 )
 from loopkit.retry import Transient, retry_call

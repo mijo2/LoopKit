@@ -2,9 +2,9 @@
 
 from importlib.metadata import PackageNotFoundError, version
 
+from loopkit.client import DEFAULT_MODELS
 from loopkit.errors import LoopError, LoopWarning
 from loopkit.knowledge import Knowledge, Passage
-from loopkit.client import DEFAULT_MODELS
 from loopkit.loop import (
     BOOK_INSTRUCTIONS,
     DEFAULT_INSTRUCTIONS,
@@ -28,6 +28,9 @@ __all__ = [
     "DEFAULT_INSTRUCTIONS",
     "DEFAULT_MODEL",
     "DEFAULT_MODELS",
+    "OPEN_BOOK_INSTRUCTIONS",
+    "OPEN_INSTRUCTIONS",
+    "SEARCH_INSTRUCTIONS",
     "Answer",
     "Check",
     "Citation",
@@ -36,12 +39,9 @@ __all__ = [
     "Loop",
     "LoopError",
     "LoopWarning",
-    "OPEN_BOOK_INSTRUCTIONS",
-    "OPEN_INSTRUCTIONS",
-    "SEARCH_INSTRUCTIONS",
-    "default_instructions",
     "Passage",
     "ResponseKind",
     "__version__",
     "ask",
+    "default_instructions",
 ]

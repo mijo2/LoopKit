@@ -1,0 +1,1129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>loop-kit</title>
+<style>
+  :root {
+    color-scheme: light;
+    --paper: #f4f1ea;
+    --card: #fffdf8;
+    --ink: #1d1a16;
+    --muted: #5c564c;
+    --line: #d4cbbd;
+    --line-soft: #e6dfd2;
+    --accent: #1d1a16;
+    --error: #8a2b2b;
+    --error-bg: #fbecec;
+    --ok: #2f6b3a;
+    --ok-bg: #e8f2ea;
+    --warn: #8a5a1b;
+    --warn-bg: #f7ecd9;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --serif: "Iowan Old Style", Palatino, Georgia, serif;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--serif);
+    display: flex;
+    flex-direction: column;
+  }
+  button, input, select, textarea { font-family: var(--sans); color: inherit; }
+  button { cursor: pointer; }
+  button:disabled { opacity: 0.55; cursor: default; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  [hidden] { display: none !important; }
+
+  /* Header */
+  header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+    padding: 0.9rem 1.25rem;
+    border-bottom: 1px solid var(--line);
+    background: var(--paper);
+  }
+  header h1 { margin: 0; font-weight: 500; font-size: 1.35rem; letter-spacing: -0.03em; }
+  header .lede { margin: 0; color: var(--muted); font-size: 0.95rem; }
+  header .spacer { flex: 1; }
+  .chips { display: flex; gap: 0.4rem; flex-wrap: wrap; font-family: var(--sans); font-size: 0.78rem; }
+  .chip {
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 0.2rem 0.6rem;
+    background: var(--card);
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .chip.ok { color: var(--ok); background: var(--ok-bg); border-color: transparent; }
+  .chip.warn { color: var(--warn); background: var(--warn-bg); border-color: transparent; }
+  .chip.bad { color: var(--error); background: var(--error-bg); border-color: transparent; }
+  .save-status { font-family: var(--sans); font-size: 0.75rem; color: var(--muted); white-space: nowrap; }
+  .save-status.bad { color: var(--error); }
+  .ghost {
+    font: 600 0.85rem/1 var(--sans);
+    background: transparent;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 0.55rem 0.8rem;
+  }
+  .ghost[aria-expanded="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+
+  /* Layout */
+  .layout {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1rem;
+    padding: 1rem 1.25rem 1.25rem;
+    max-width: 90rem;
+    width: 100%;
+    margin: 0 auto;
+  }
+  .layout.with-options { grid-template-columns: minmax(0, 1fr) 24rem; }
+  @media (max-width: 60rem) {
+    .layout.with-options { grid-template-columns: minmax(0, 1fr); }
+  }
+
+  /* Tabs */
+  .workspace { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  .tabs {
+    display: flex;
+    align-items: flex-end;
+    gap: 0.25rem;
+    border-bottom: 1px solid var(--line);
+    font-family: var(--sans);
+    overflow-x: auto;
+  }
+  .tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    background: transparent;
+    border: 1px solid transparent;
+    border-bottom: 0;
+    border-radius: 8px 8px 0 0;
+    padding: 0.5rem 0.85rem;
+    font-size: 0.88rem;
+    color: var(--muted);
+    max-width: 16rem;
+    white-space: nowrap;
+  }
+  .tab .title { overflow: hidden; text-overflow: ellipsis; }
+  .tab[aria-selected="true"] {
+    background: var(--card);
+    border-color: var(--line);
+    color: var(--ink);
+    margin-bottom: -1px;
+    padding-bottom: calc(0.5rem + 1px);
+  }
+  .tab .close {
+    border: 0;
+    background: transparent;
+    color: inherit;
+    padding: 0 0.15rem;
+    line-height: 1;
+    font-size: 1rem;
+    opacity: 0.6;
+  }
+  .tab .close:hover { opacity: 1; }
+  .tab.add { padding: 0.5rem 0.7rem; font-size: 1.1rem; line-height: 1; }
+
+  /* Chat panel */
+  .panel {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-top: 0;
+    border-radius: 0 0 10px 10px;
+  }
+  .transcript {
+    flex: 1;
+    min-height: 14rem;
+    overflow-y: auto;
+    list-style: none;
+    margin: 0;
+    padding: 1.25rem 1.25rem 0.5rem;
+    scroll-behavior: smooth;
+  }
+  .empty {
+    color: var(--muted);
+    text-align: center;
+    padding: 3rem 1rem;
+    line-height: 1.5;
+  }
+  .empty code { font-family: var(--mono); font-size: 0.85em; }
+  .message { margin: 0 0 1.1rem; max-width: 52rem; }
+  .message.user { margin-left: auto; max-width: 40rem; }
+  .message .who {
+    font: 600 0.72rem/1 var(--sans);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 0.35rem;
+  }
+  .message.user .who { text-align: right; }
+  .bubble {
+    padding: 0.8rem 0.95rem;
+    border-radius: 10px;
+    border: 1px solid var(--line-soft);
+    background: var(--paper);
+    line-height: 1.55;
+    font-size: 1.05rem;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .message.user .bubble { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+  .message.error .bubble { background: var(--error-bg); color: var(--error); border-color: transparent; font-family: var(--sans); font-size: 0.95rem; }
+  .message.pending .bubble { color: var(--muted); font-family: var(--sans); font-size: 0.95rem; }
+  .message.pending .bubble::after { content: "…"; animation: dots 1.2s steps(4, end) infinite; }
+  @keyframes dots { 0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75% { content: "..."; } }
+  .meta {
+    display: flex;
+    gap: 0.35rem;
+    flex-wrap: wrap;
+    margin-top: 0.45rem;
+    font-family: var(--sans);
+    font-size: 0.78rem;
+    color: var(--muted);
+  }
+  .meta .chip { padding: 0.1rem 0.5rem; }
+  details.more { margin-top: 0.4rem; font-family: var(--sans); font-size: 0.86rem; }
+  details.more > summary { cursor: pointer; color: var(--muted); user-select: none; }
+  details.more > summary:hover { color: var(--ink); }
+  .section { margin: 0.7rem 0 0 0.25rem; padding-left: 0.75rem; border-left: 2px solid var(--line-soft); }
+  .section h4 { margin: 0 0 0.35rem; font-size: 0.75rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  .section ul { margin: 0; padding-left: 0; list-style: none; }
+  .section ul ul { padding-left: 1rem; margin-top: 0.2rem; }
+  .section li { margin: 0.25rem 0; line-height: 1.45; }
+  .section .note { color: var(--muted); display: block; }
+  .section pre {
+    margin: 0.25rem 0 0;
+    padding: 0.6rem 0.7rem;
+    background: var(--paper);
+    border: 1px solid var(--line-soft);
+    border-radius: 6px;
+    font: 0.8rem/1.45 var(--mono);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 18rem;
+    overflow: auto;
+  }
+  .section blockquote {
+    margin: 0.3rem 0 0;
+    padding: 0.3rem 0 0.3rem 0.7rem;
+    border-left: 2px solid var(--line);
+    color: var(--muted);
+    font-family: var(--serif);
+    font-size: 0.95rem;
+    white-space: pre-wrap;
+  }
+  .verdict { font-weight: 600; }
+  .verdict.pass { color: var(--ok); }
+  .verdict.fail { color: var(--error); }
+  .kv { display: grid; grid-template-columns: max-content 1fr; gap: 0.15rem 0.8rem; margin: 0; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; font-family: var(--mono); font-size: 0.8rem; overflow-wrap: anywhere; }
+
+  /* Composer */
+  .composer {
+    display: flex;
+    gap: 0.6rem;
+    align-items: flex-end;
+    padding: 0.85rem 1.25rem 1rem;
+    border-top: 1px solid var(--line-soft);
+  }
+  .composer textarea {
+    flex: 1;
+    min-height: 3.2rem;
+    max-height: 14rem;
+    resize: vertical;
+    font: 1rem/1.5 var(--sans);
+    padding: 0.7rem 0.8rem;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--paper);
+  }
+  .composer .send {
+    font: 600 0.95rem/1 var(--sans);
+    background: var(--ink);
+    color: var(--paper);
+    border: 0;
+    border-radius: 8px;
+    padding: 0.85rem 1.1rem;
+  }
+  .composer .send:disabled { cursor: progress; }
+  .composer .clear { align-self: center; }
+  .hint { font-family: var(--sans); font-size: 0.75rem; color: var(--muted); padding: 0 1.25rem 0.8rem; margin: 0; }
+
+  /* Options */
+  .options {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 1rem 1.1rem 1.2rem;
+    font-family: var(--sans);
+    font-size: 0.88rem;
+    align-self: start;
+    max-height: calc(100vh - 7rem);
+    overflow-y: auto;
+    position: sticky;
+    top: 1rem;
+  }
+  .options h2 { margin: 0 0 0.2rem; font: 600 0.95rem/1.3 var(--sans); display: flex; gap: 0.5rem; align-items: baseline; flex-wrap: wrap; }
+  .options .for-tab { font-weight: 400; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+  .options .for-tab::before { content: "· "; }
+  .tab .dot { width: 0.4rem; height: 0.4rem; border-radius: 50%; background: var(--warn); flex: none; }
+  .options .lede { margin: 0 0 1rem; color: var(--muted); line-height: 1.45; }
+  fieldset { border: 0; padding: 0; margin: 0 0 1.1rem; min-width: 0; }
+  legend { font-weight: 600; font-size: 0.75rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); padding: 0; margin-bottom: 0.5rem; }
+  .field { display: flex; flex-direction: column; gap: 0.3rem; margin-bottom: 0.7rem; }
+  .field label, .field .label { font-weight: 600; }
+  .field small { color: var(--muted); line-height: 1.4; }
+  .field input[type="text"], .field input[type="number"], .field select, .field textarea {
+    width: 100%;
+    font: 0.9rem/1.4 var(--sans);
+    padding: 0.45rem 0.55rem;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--paper);
+  }
+  .field textarea { min-height: 5.5rem; resize: vertical; font-family: var(--mono); font-size: 0.8rem; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.7rem; }
+  .choices { display: flex; gap: 0.9rem; flex-wrap: wrap; }
+  .choices label { display: inline-flex; align-items: center; gap: 0.35rem; font-weight: 400; }
+  .toggle { display: flex; align-items: flex-start; gap: 0.5rem; margin-bottom: 0.6rem; }
+  .toggle input { margin-top: 0.2rem; }
+  .toggle small { display: block; color: var(--muted); }
+  .options .actions { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; }
+  .options .badge { color: var(--muted); font-size: 0.78rem; }
+  .banner {
+    margin: 0 1.25rem;
+    padding: 0.7rem 0.9rem;
+    border-radius: 8px;
+    font-family: var(--sans);
+    font-size: 0.9rem;
+    background: var(--error-bg);
+    color: var(--error);
+  }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>loop-kit</h1>
+    <p class="lede">Try the loop loaded in this process. In a program, call Loop.ask.</p>
+  </div>
+  <div class="spacer"></div>
+  <div id="status" class="chips" aria-live="polite"></div>
+  <span id="save-status" class="save-status" aria-live="polite"></span>
+  <button id="toggle-options" class="ghost" type="button" aria-expanded="false" aria-controls="options">Advanced options</button>
+</header>
+
+<p id="banner" class="banner" role="alert" hidden></p>
+
+<div id="layout" class="layout">
+  <section class="workspace" aria-label="Chats">
+    <nav id="tabs" class="tabs" role="tablist" aria-label="Chat tabs"></nav>
+    <div id="panel" class="panel" role="tabpanel">
+      <ol id="transcript" class="transcript" aria-live="polite"></ol>
+      <form id="composer" class="composer">
+        <label for="task" hidden>Question</label>
+        <textarea id="task" name="task" rows="2" placeholder="Ask the knowledge base…" required></textarea>
+        <button type="button" id="clear" class="ghost clear" title="Clear this chat">Clear</button>
+        <button type="submit" id="send" class="send">Ask</button>
+      </form>
+      <p class="hint">Enter sends, Shift+Enter adds a line. The earlier turns of this chat go with each ask and the server folds them into one task; open “Details” on an answer to see exactly what the loop received. With <code>--session</code>, chats are kept in a file and come back after a refresh.</p>
+    </div>
+  </section>
+
+  <aside id="options" class="options" aria-label="Advanced options" hidden>
+    <h2>Advanced options <span id="options-tab" class="for-tab"></span></h2>
+    <p class="lede">Settings for this tab only, used by its next ask. A tab opened with <b>+</b> starts from the settings of the tab it was opened from, then changes on its own. They are the arguments of <code>Loop(...)</code>; the knowledge base read at startup stays in memory.</p>
+    <form id="options-form">
+      <fieldset>
+        <legend>Knowledge</legend>
+        <div class="field">
+          <label for="opt-knowledge_source">Source</label>
+          <select id="opt-knowledge_source" name="knowledge_source">
+            <option value="project">This server's knowledge base</option>
+            <option value="none">None (open mode)</option>
+            <option value="text">Pasted text</option>
+          </select>
+          <small id="knowledge-summary"></small>
+        </div>
+        <div class="field" id="field-knowledge_text" hidden>
+          <label for="opt-knowledge_text">Text</label>
+          <textarea id="opt-knowledge_text" name="knowledge_text" placeholder="Refunds are available for 30 days. After that the sale is final."></textarea>
+          <small>Read as one document. Markdown headings become passage headings.</small>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Instructions</legend>
+        <div class="field">
+          <label for="opt-instructions">One per line</label>
+          <textarea id="opt-instructions" name="instructions"></textarea>
+          <small>Leave empty for the built-in instructions (shown greyed). Each line is checked on its own.</small>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Model</legend>
+        <div class="row">
+          <div class="field">
+            <label for="opt-provider">Provider</label>
+            <select id="opt-provider" name="provider"></select>
+          </div>
+          <div class="field">
+            <label for="opt-model">Model</label>
+            <input id="opt-model" name="model" type="text" autocomplete="off" spellcheck="false">
+          </div>
+        </div>
+        <div class="field" id="field-base_url">
+          <label for="opt-base_url">Base URL</label>
+          <input id="opt-base_url" name="base_url" type="text" autocomplete="off" spellcheck="false" placeholder="http://localhost:11434/v1">
+          <small>For an OpenAI-compatible server (Ollama, vLLM, LM Studio, …). Implies the compatible provider.</small>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Loop</legend>
+        <div class="field">
+          <span class="label">Check mode</span>
+          <div class="choices">
+            <label><input type="radio" name="check_mode" value="each"> each</label>
+            <label><input type="radio" name="check_mode" value="all"> all</label>
+          </div>
+          <small><b>each</b>: one model call per instruction, then grounding. <b>all</b>: every instruction in one call.</small>
+        </div>
+        <div class="field">
+          <span class="label">Response</span>
+          <div class="choices">
+            <label><input type="radio" name="response" value="normal"> normal</label>
+            <label><input type="radio" name="response" value="book"> book</label>
+          </div>
+          <small><b>book</b> asks for a long response with headings and raises the output cap.</small>
+        </div>
+        <div class="row">
+          <div class="field">
+            <label for="opt-max_turns">Max turns</label>
+            <input id="opt-max_turns" name="max_turns" type="number" min="1" step="1">
+          </div>
+          <div class="field">
+            <label for="opt-top_k">Top k</label>
+            <input id="opt-top_k" name="top_k" type="number" min="1" step="1">
+          </div>
+        </div>
+        <div class="field">
+          <label for="opt-context_budget">Context budget (characters)</label>
+          <input id="opt-context_budget" name="context_budget" type="number" min="1" step="1">
+          <small>A knowledge base under this size is sent whole; otherwise BM25 keeps the top k passages.</small>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" name="search" id="opt-search">
+          <span>Web search<small>The provider's search tool in the draft and the audit (xAI, OpenAI, Anthropic).</small></span>
+        </label>
+        <label class="toggle">
+          <input type="checkbox" name="auto_optimize" id="opt-auto_optimize">
+          <span>Auto-optimize<small>One call before the loop writes a role for the task that prefixes every draft and check.</small></span>
+        </label>
+      </fieldset>
+
+      <div class="actions">
+        <button type="button" id="reset-options" class="ghost">Reset this tab to server settings</button>
+        <span id="options-badge" class="badge"></span>
+      </div>
+    </form>
+  </aside>
+</div>
+
+<noscript><p class="banner">This page needs JavaScript. You can also POST JSON to /ask.</p></noscript>
+
+<script>
+"use strict";
+
+// ---------------------------------------------------------------------------
+// DOM helpers. Everything is built with createElement and textContent, so text
+// from the server or the user is never parsed as markup.
+// ---------------------------------------------------------------------------
+const $ = (selector, root = document) => root.querySelector(selector);
+
+function el(tag, attrs, ...children) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(attrs || {})) {
+    if (value === null || value === undefined || value === false) continue;
+    if (key === "class") node.className = value;
+    else if (key === "text") node.textContent = value;
+    else if (key.startsWith("on") && typeof value === "function") node.addEventListener(key.slice(2), value);
+    else node.setAttribute(key, value === true ? "" : String(value));
+  }
+  for (const child of children.flat()) {
+    if (child === null || child === undefined || child === false) continue;
+    node.appendChild(typeof child === "string" ? document.createTextNode(child) : child);
+  }
+  return node;
+}
+
+// ---------------------------------------------------------------------------
+// State. Tabs are a list so more of them, or other kinds of tab, are a
+// small change: add a renderer under `renderers` keyed by `tab.kind`.
+// ---------------------------------------------------------------------------
+const state = {
+  config: null,      // GET /config
+  tabs: [],          // [{ id, kind, title, options, messages, history, busy }]
+  activeId: null,
+  nextId: 1,
+};
+
+const ui = {
+  status: $("#status"),
+  saveStatus: $("#save-status"),
+  banner: $("#banner"),
+  layout: $("#layout"),
+  toggleOptions: $("#toggle-options"),
+  options: $("#options"),
+  optionsForm: $("#options-form"),
+  optionsBadge: $("#options-badge"),
+  optionsTab: $("#options-tab"),
+  knowledgeSummary: $("#knowledge-summary"),
+  tabs: $("#tabs"),
+  transcript: $("#transcript"),
+  composer: $("#composer"),
+  task: $("#task"),
+  send: $("#send"),
+  clear: $("#clear"),
+};
+
+// ---------------------------------------------------------------------------
+// Session. When the server was started with --session, the page restores its
+// tabs from GET /session before the first paint and, after every change,
+// sends its whole state with PUT /session. In-flight asks are not saved.
+// ---------------------------------------------------------------------------
+const session = {
+  enabled: false,
+  timer: null,
+  restored: false,
+};
+
+function snapshot() {
+  return {
+    version: 1,
+    active_id: state.activeId,
+    tabs: state.tabs.map((tab) => ({
+      id: tab.id,
+      kind: tab.kind,
+      label: tab.label,
+      title: tab.title,
+      options: tab.options,
+      messages: tab.messages.filter((message) => message.role !== "pending"),
+      history: tab.history,
+    })),
+  };
+}
+
+function restore(saved) {
+  if (!saved || !Array.isArray(saved.tabs) || !saved.tabs.length) return false;
+  state.tabs = saved.tabs.map((tab) => ({
+    id: tab.id,
+    kind: tab.kind || "chat",
+    label: tab.label,
+    title: tab.title || tab.label,
+    options: { ...serverOptions(), ...(tab.options || {}) },
+    messages: (tab.messages || []).filter((message) => message.role !== "pending"),
+    history: (tab.history || []).map((pair) => [pair[0], pair[1]]),
+    busy: false,
+  }));
+  state.nextId = Math.max(0, ...state.tabs.map((tab) => tab.id)) + 1;
+  state.activeId = state.tabs.some((tab) => tab.id === saved.active_id) ? saved.active_id : state.tabs[0].id;
+  return true;
+}
+
+function persist() {
+  if (!session.enabled) return;
+  clearTimeout(session.timer);
+  session.timer = setTimeout(persistNow, 300);
+}
+
+async function persistNow() {
+  if (!session.enabled) return;
+  clearTimeout(session.timer);
+  session.timer = null;
+  try {
+    const response = await fetch("/session", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(snapshot()),
+    });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || "HTTP " + response.status);
+    ui.saveStatus.className = "save-status";
+    ui.saveStatus.textContent = "saved " + body.saved_at.slice(11, 16);
+    ui.saveStatus.title = body.path;
+  } catch (err) {
+    ui.saveStatus.className = "save-status bad";
+    ui.saveStatus.textContent = "not saved: " + (err && err.message ? err.message : err);
+  }
+}
+
+function plural(count, noun) {
+  return count + " " + noun + (count === 1 ? "" : "s");
+}
+
+function activeTab() {
+  return tabById(state.activeId);
+}
+
+function tabById(id) {
+  return state.tabs.find((tab) => tab.id === id) || null;
+}
+
+function cloneOptions(options) {
+  // Options are flat (strings, numbers, booleans), so a shallow copy is a full copy.
+  return { ...options };
+}
+
+function createTab(kind, options) {
+  // Labels stay unique after closes: the lowest free "Chat N".
+  const used = new Set(state.tabs.map((t) => t.label));
+  let n = 1;
+  while (used.has("Chat " + n)) n += 1;
+  const label = kind === "chat" ? "Chat " + n : kind;
+  const tab = {
+    id: state.nextId++,
+    kind,
+    label,           // fixed name
+    title: label,    // shown on the tab; becomes the first question once asked
+    options: options ? cloneOptions(options) : serverOptions(),   // inherited by value, then independent
+    messages: [],
+    history: [],     // [[ask, final answer], ...] oldest first, successful turns only. Sent with
+                     // each ask; the server folds it into the task (serve.compose_task).
+    busy: false,
+  };
+  state.tabs.push(tab);
+  return tab;
+}
+
+function activateTab(id) {
+  state.activeId = id;
+  renderTabs();
+  renderActive();
+  persist();
+}
+
+function closeTab(id) {
+  const index = state.tabs.findIndex((tab) => tab.id === id);
+  if (index < 0 || state.tabs.length === 1) return;
+  state.tabs.splice(index, 1);
+  if (state.activeId === id) {
+    state.activeId = state.tabs[Math.max(0, index - 1)].id;
+  }
+  renderTabs();
+  renderActive();
+  persist();
+}
+
+// ---------------------------------------------------------------------------
+// Options. `serverOptions()` mirrors what the server loaded; a request only
+// carries `options` when the tab differs from that, so an untouched form
+// behaves exactly like `loopkit ask`.
+// ---------------------------------------------------------------------------
+function serverOptions() {
+  const loop = state.config.loop;
+  return {
+    knowledge_source: "project",
+    knowledge_text: "",
+    instructions: "",              // "" means the built-in list for the mode
+    provider: loop.provider,
+    model: loop.model,
+    base_url: "",
+    check_mode: loop.check_mode,
+    response: loop.response,
+    max_turns: loop.max_turns,
+    top_k: loop.top_k,
+    context_budget: loop.context_budget,
+    search: loop.search,
+    auto_optimize: loop.auto_optimize,
+  };
+}
+
+function sameAsServer(options) {
+  const base = serverOptions();
+  return Object.keys(base).every((key) => String(options[key]) === String(base[key]));
+}
+
+function requestOptions(options) {
+  if (sameAsServer(options)) return null;
+  const lines = options.instructions.split("\n").map((line) => line.trim()).filter(Boolean);
+  const out = {
+    knowledge_source: options.knowledge_source,
+    instructions: lines.length ? lines : null,
+    check_mode: options.check_mode,
+    response: options.response,
+    max_turns: Number(options.max_turns),
+    top_k: Number(options.top_k),
+    context_budget: Number(options.context_budget),
+    search: Boolean(options.search),
+    auto_optimize: Boolean(options.auto_optimize),
+  };
+  if (options.knowledge_source === "text") out.knowledge_text = options.knowledge_text;
+  if (options.provider) out.provider = options.provider;
+  if (options.model.trim()) out.model = options.model.trim();
+  if (options.base_url.trim()) out.base_url = options.base_url.trim();
+  return out;
+}
+
+function effectiveMode(options) {
+  if (options.knowledge_source === "none") return "open";
+  if (options.knowledge_source === "text") return "knowledge";
+  return state.config.loop.mode;
+}
+
+function builtInInstructions(options) {
+  const mode = effectiveMode(options);
+  const match = state.config.default_instructions.find(
+    (item) => item.mode === mode && item.response === options.response && item.search === Boolean(options.search)
+  );
+  return match ? match.instructions : [];
+}
+
+function fillProviderSelect(select, current) {
+  select.replaceChildren();
+  const providers = state.config.providers;
+  if (current === "custom") {
+    select.appendChild(el("option", { value: "custom", text: "custom client (fixed)" }));
+    select.disabled = true;
+    return;
+  }
+  select.disabled = false;
+  for (const name of ["xai", "openai", "anthropic", "compatible"]) {
+    const info = providers[name] || {};
+    let label = name;
+    let disabled = false;
+    if (name === "compatible") {
+      label += info.base_url ? " (" + info.base_url + ")" : " (needs a base URL)";
+    } else if (!info.key_set && name !== current) {
+      label += " (" + info.env + " not set)";
+      disabled = true;
+    }
+    select.appendChild(el("option", { value: name, text: label, disabled }));
+  }
+  if (![...select.options].some((option) => option.value === current)) {
+    select.appendChild(el("option", { value: current, text: current }));
+  }
+}
+
+function fillForm(tab) {
+  const form = ui.optionsForm;
+  const options = tab.options;
+  form.dataset.tabId = String(tab.id);
+  ui.optionsTab.textContent = tab.title;
+  form.elements.knowledge_source.value = options.knowledge_source;
+  form.elements.knowledge_text.value = options.knowledge_text;
+  form.elements.instructions.value = options.instructions;
+  fillProviderSelect(form.elements.provider, options.provider);
+  form.elements.provider.value = options.provider;
+  form.elements.model.value = options.model;
+  form.elements.base_url.value = options.base_url;
+  form.elements.check_mode.value = options.check_mode;
+  form.elements.response.value = options.response;
+  form.elements.max_turns.value = options.max_turns;
+  form.elements.top_k.value = options.top_k;
+  form.elements.context_budget.value = options.context_budget;
+  form.elements.search.checked = Boolean(options.search);
+  form.elements.auto_optimize.checked = Boolean(options.auto_optimize);
+  refreshFormHints(options);
+}
+
+function readForm() {
+  const form = ui.optionsForm;
+  return {
+    knowledge_source: form.elements.knowledge_source.value,
+    knowledge_text: form.elements.knowledge_text.value,
+    instructions: form.elements.instructions.value,
+    provider: form.elements.provider.value,
+    model: form.elements.model.value,
+    base_url: form.elements.base_url.value,
+    check_mode: form.elements.check_mode.value,
+    response: form.elements.response.value,
+    max_turns: form.elements.max_turns.value,
+    top_k: form.elements.top_k.value,
+    context_budget: form.elements.context_budget.value,
+    search: form.elements.search.checked,
+    auto_optimize: form.elements.auto_optimize.checked,
+  };
+}
+
+function refreshFormHints(options) {
+  const form = ui.optionsForm;
+  $("#field-knowledge_text").hidden = options.knowledge_source !== "text";
+  const knowledge = state.config.loop.knowledge;
+  if (options.knowledge_source === "project") {
+    ui.knowledgeSummary.textContent = knowledge.passages
+      ? plural(knowledge.passages, "passage") + " from " + knowledge.sources.join(", ")
+      : "The server loaded no knowledge base: this is open mode.";
+  } else if (options.knowledge_source === "none") {
+    ui.knowledgeSummary.textContent = "The model answers from its own knowledge; the audit checks accuracy instead of grounding.";
+  } else {
+    ui.knowledgeSummary.textContent = "";
+  }
+  form.elements.instructions.placeholder = builtInInstructions(options).join("\n");
+  const info = state.config.providers[options.provider] || {};
+  form.elements.model.placeholder = options.provider === "compatible"
+    ? (info.default_model || "required for this server")
+    : (info.default_model || "provider default");
+  ui.optionsBadge.textContent = sameAsServer(options) ? "Same as the server." : "Differs from the server.";
+}
+
+function syncOptionsFromForm() {
+  // Write to the tab the form was filled for, not to whichever tab is active:
+  // a blur-triggered change event can land while a tab switch is under way.
+  const tab = tabById(Number(ui.optionsForm.dataset.tabId));
+  if (!tab) return;
+  tab.options = readForm();
+  refreshFormHints(tab.options);
+  if (tab.id === state.activeId) renderTabs();   // the "differs from the server" dot
+  persist();
+}
+
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+function renderStatus() {
+  const loop = state.config.loop;
+  const chips = [
+    el("span", { class: "chip ok", text: loop.provider + " · " + loop.model }),
+    el("span", { class: "chip", text: loop.mode === "open" ? "open mode" : "knowledge mode" }),
+  ];
+  if (loop.knowledge.passages) {
+    chips.push(el("span", { class: "chip", text: plural(loop.knowledge.passages, "passage") }));
+  }
+  const keys = Object.entries(state.config.providers)
+    .filter(([name, info]) => name !== "compatible" && info.key_set)
+    .map(([name]) => name);
+  chips.push(el("span", { class: "chip", title: "API keys found in this process's environment (values are never sent to the page)", text: keys.length ? "keys: " + keys.join(", ") : "no provider key set" }));
+  if (loop.debug_path) chips.push(el("span", { class: "chip warn", text: "debug log on" }));
+  if (state.config.session && state.config.session.enabled) {
+    chips.push(el("span", { class: "chip", title: state.config.session.path, text: "session on" }));
+  }
+  ui.status.replaceChildren(...chips);
+}
+
+function renderTabs() {
+  const buttons = state.tabs.map((tab) => {
+    const selected = tab.id === state.activeId;
+    const button = el(
+      "button",
+      { type: "button", role: "tab", class: "tab", "aria-selected": selected ? "true" : "false", onclick: () => activateTab(tab.id) },
+      el("span", { class: "title", text: tab.title + (tab.busy ? " …" : "") })
+    );
+    if (!sameAsServer(tab.options)) {
+      button.appendChild(el("span", { class: "dot", title: "This tab's settings differ from the server's", "aria-label": "custom settings" }));
+    }
+    if (state.tabs.length > 1) {
+      button.appendChild(
+        el("span", {
+          class: "close",
+          role: "button",
+          "aria-label": "Close " + tab.title,
+          title: "Close",
+          text: "×",
+          onclick: (event) => { event.stopPropagation(); closeTab(tab.id); },
+        })
+      );
+    }
+    return button;
+  });
+  buttons.push(
+    el("button", {
+      type: "button",
+      class: "tab add",
+      title: "New chat (copies this tab's options)",
+      "aria-label": "New chat",
+      text: "+",
+      onclick: () => {
+        const current = activeTab();
+        const tab = createTab("chat", current ? current.options : null);
+        activateTab(tab.id);
+        ui.task.focus();
+      },
+    })
+  );
+  ui.tabs.replaceChildren(...buttons);
+}
+
+const renderers = {
+  chat: renderChatTab,
+};
+
+function renderActive() {
+  const tab = activeTab();
+  if (!tab) return;
+  (renderers[tab.kind] || renderChatTab)(tab);
+  fillForm(tab);
+}
+
+function renderChatTab(tab) {
+  ui.send.disabled = tab.busy;
+  ui.send.textContent = tab.busy ? "Working…" : "Ask";
+  if (!tab.messages.length) {
+    const loop = state.config.loop;
+    ui.transcript.replaceChildren(
+      el("li", { class: "empty" },
+        loop.mode === "open"
+          ? "No knowledge base is loaded, so the model answers from its own knowledge and the audit checks accuracy. "
+          : "Ask something the documents can answer. ",
+        "The loop drafts, checks each instruction and grounding, and revises up to ",
+        el("code", { text: String(loop.max_turns) }),
+        " times."
+      )
+    );
+    return;
+  }
+  ui.transcript.replaceChildren(...tab.messages.map(renderMessage));
+  ui.transcript.scrollTop = ui.transcript.scrollHeight;
+}
+
+function renderMessage(message) {
+  const item = el("li", { class: "message " + message.role });
+  if (message.role === "user") {
+    item.append(el("div", { class: "who", text: "You" }), el("div", { class: "bubble", text: message.text }));
+    return item;
+  }
+  if (message.role === "pending") {
+    item.append(el("div", { class: "who", text: "loop-kit" }), el("div", { class: "bubble", text: "Drafting and checking" }));
+    return item;
+  }
+  if (message.role === "error") {
+    item.append(el("div", { class: "who", text: "Error" }), el("div", { class: "bubble", text: message.text }));
+    return item;
+  }
+  const answer = message.answer;
+  item.append(el("div", { class: "who", text: "loop-kit" }), el("div", { class: "bubble", text: answer.text || "(empty answer)" }));
+
+  const turns = answer.turns === 1 ? "1 turn" : answer.turns + " turns";
+  const meta = el("div", { class: "meta" },
+    el("span", { class: "chip " + (answer.stopped_reason === "passed" ? "ok" : "warn"), text: answer.stopped_reason === "passed" ? "passed in " + turns : "stopped after " + turns + " (max turns)" }),
+    el("span", { class: "chip", text: answer.mode + " mode" }),
+    answer.loop ? el("span", { class: "chip", text: answer.loop.provider + " · " + answer.loop.model }) : null,
+    answer.loop ? el("span", { class: "chip", text: "check " + answer.loop.check_mode + " · " + answer.loop.response }) : null,
+    answer.loop && answer.loop.search ? el("span", { class: "chip", text: "web search" }) : null,
+    answer.citations.length ? el("span", { class: "chip", text: plural(answer.citations.length, "citation") }) : null,
+  );
+  item.append(meta);
+
+  const details = el("details", { class: "more" }, el("summary", { text: "Details" }));
+  if (answer.role) {
+    details.append(section("Role written by the optimize step", el("p", { text: answer.role })));
+  }
+  if (answer.citations.length) {
+    details.append(section("Citations", el("ul", {}, answer.citations.map((citation) =>
+      el("li", {},
+        el("b", { text: "[" + citation.id + "] " }),
+        citation.source + (citation.heading ? " — " + citation.heading : ""),
+        el("blockquote", { text: citation.text })
+      )
+    ))));
+  }
+  if (answer.checks.length) {
+    details.append(section("Checks", el("ul", {}, answer.checks.map((check) => {
+      const verdicts = el("ul", {}, check.instructions.map((instruction) =>
+        el("li", {},
+          el("span", { class: "verdict " + (instruction.followed ? "pass" : "fail"), text: instruction.followed ? "✓ " : "✗ " }),
+          instruction.number + ". " + instruction.instruction,
+          instruction.note ? el("span", { class: "note", text: instruction.note }) : null
+        )
+      ));
+      verdicts.append(el("li", {},
+        el("span", { class: "verdict " + (check.grounded ? "pass" : "fail"), text: check.grounded ? "✓ " : "✗ " }),
+        answer.mode === "open" ? "Accuracy" : "Grounding"
+      ));
+      return el("li", {},
+        el("b", { text: "Turn " + check.turn + ": " + (check.revise ? "revise" : "accepted") }),
+        verdicts,
+        check.notes ? el("span", { class: "note", text: "Notes: " + check.notes }) : null,
+        check.gaps.length ? el("span", { class: "note", text: "Gaps: " + check.gaps.join(" · ") }) : null
+      );
+    }))));
+  }
+  if (typeof answer.task === "string" && answer.task !== message.typed) {
+    details.append(section("Sent to the loop as one task", el("pre", { text: answer.task })));
+  }
+  if (answer.loop) {
+    const dl = el("dl", { class: "kv" });
+    for (const [key, value] of Object.entries(answer.loop)) {
+      dl.append(el("dt", { text: key }), el("dd", { text: Array.isArray(value) ? value.map((v, i) => (i + 1) + ". " + v).join("\n") : String(value) }));
+    }
+    details.append(section("Settings used", dl));
+  }
+  item.append(details);
+  return item;
+}
+
+function section(title, ...children) {
+  return el("div", { class: "section" }, el("h4", { text: title }), ...children);
+}
+
+// ---------------------------------------------------------------------------
+// Asking
+// ---------------------------------------------------------------------------
+async function ask(tab, typed) {
+  const options = requestOptions(tab.options);
+  const history = tab.history.slice();
+  tab.messages.push({ role: "user", text: typed });
+  const pending = { role: "pending" };
+  tab.messages.push(pending);
+  tab.busy = true;
+  if (tab.messages.length === 2) tab.title = typed.length > 28 ? typed.slice(0, 27) + "…" : typed;
+  renderTabs();
+  if (tab.id === state.activeId) renderActive();
+
+  let result;
+  try {
+    const response = await fetch("/ask", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ task: typed, ...(history.length ? { history } : {}), ...(options ? { options } : {}) }),
+    });
+    let body;
+    try {
+      body = await response.json();
+    } catch (_) {
+      throw new Error("The server returned a response that is not JSON (HTTP " + response.status + ").");
+    }
+    if (!response.ok) throw new Error(body.error || "The request failed (HTTP " + response.status + ").");
+    result = { role: "assistant", answer: body, typed };
+    tab.history.push([typed, body.text]);
+  } catch (err) {
+    result = { role: "error", text: err && err.message ? err.message : "The request failed.", typed };
+  } finally {
+    tab.busy = false;
+  }
+  tab.messages.splice(tab.messages.indexOf(pending), 1, result);
+  renderTabs();
+  if (tab.id === state.activeId) renderActive();
+  persist();
+}
+
+// ---------------------------------------------------------------------------
+// Wiring
+// ---------------------------------------------------------------------------
+ui.composer.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const tab = activeTab();
+  const typed = ui.task.value.trim();
+  if (!tab || tab.busy || !typed) return;
+  ui.task.value = "";
+  ask(tab, typed);
+  ui.task.focus();
+});
+
+ui.task.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  if (event.shiftKey) return;                      // newline
+  if (event.isComposing) return;                   // IME
+  event.preventDefault();
+  ui.composer.requestSubmit();
+});
+
+ui.clear.addEventListener("click", () => {
+  const tab = activeTab();
+  if (!tab || tab.busy) return;
+  tab.messages = [];
+  tab.history = [];
+  tab.title = tab.label;
+  renderTabs();
+  renderActive();
+  persist();
+});
+
+ui.toggleOptions.addEventListener("click", () => {
+  const open = ui.toggleOptions.getAttribute("aria-expanded") !== "true";
+  ui.toggleOptions.setAttribute("aria-expanded", open ? "true" : "false");
+  ui.options.hidden = !open;
+  ui.layout.classList.toggle("with-options", open);
+});
+
+ui.optionsForm.addEventListener("input", syncOptionsFromForm);
+ui.optionsForm.addEventListener("change", (event) => {
+  const form = ui.optionsForm;
+  if (event.target.name === "provider") {
+    // A new provider means its default model, unless the user types one.
+    form.elements.model.value = "";
+  }
+  if (event.target.name === "base_url" && form.elements.base_url.value.trim() && !form.elements.provider.disabled && form.elements.provider.value !== "compatible") {
+    // A base URL implies the OpenAI-compatible provider, as it does for Loop(base_url=...).
+    form.elements.provider.value = "compatible";
+    form.elements.model.value = "";
+  }
+  syncOptionsFromForm();
+});
+ui.optionsForm.addEventListener("submit", (event) => event.preventDefault());
+
+$("#reset-options").addEventListener("click", () => {
+  const tab = activeTab();
+  if (!tab) return;
+  tab.options = serverOptions();
+  fillForm(tab);
+  renderTabs();
+  persist();
+});
+
+function showBanner(text) {
+  ui.banner.textContent = text;
+  ui.banner.hidden = !text;
+}
+
+async function start() {
+  try {
+    const response = await fetch("/config");
+    if (!response.ok) throw new Error("GET /config returned HTTP " + response.status + ".");
+    state.config = await response.json();
+  } catch (err) {
+    showBanner("Could not load the server's settings: " + (err && err.message ? err.message : err) + " Is `loopkit serve` still running?");
+    ui.send.disabled = true;
+    return;
+  }
+  renderStatus();
+  session.enabled = Boolean(state.config.session && state.config.session.enabled);
+  if (session.enabled) {
+    // Load what an earlier visit saved before drawing anything.
+    try {
+      const response = await fetch("/session");
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || "HTTP " + response.status);
+      session.restored = restore(body.session);
+      ui.saveStatus.textContent = session.restored ? "restored from " + body.path.split(/[\\/]/).pop() : "";
+      ui.saveStatus.title = body.path;
+    } catch (err) {
+      showBanner("The saved session could not be loaded: " + (err && err.message ? err.message : err) + " Starting a new one; it will be overwritten on the next change.");
+    }
+  }
+  if (!state.tabs.length) createTab("chat", null);
+  // activateTab persists, but an unchanged restore is saved as-is, which is harmless.
+  activateTab(state.activeId || state.tabs[0].id);
+  const warnings = state.config.loop.knowledge.warnings || [];
+  if (state.config.loop.mode === "open" && warnings.length) {
+    showBanner(warnings[0]);
+    ui.banner.className = "banner";
+    ui.banner.style.background = "var(--warn-bg)";
+    ui.banner.style.color = "var(--warn)";
+  }
+  ui.task.focus();
+}
+
+start();
+</script>
+</body>
+</html>

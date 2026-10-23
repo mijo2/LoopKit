@@ -67,7 +67,7 @@ Issues = "https://github.com/OWNER/loop-kit/issues"
 where = ["src"]
 
 [tool.setuptools.package-data]
-loopkit = ["py.typed"]
+loopkit = ["py.typed", "ui/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

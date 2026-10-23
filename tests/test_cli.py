@@ -129,7 +129,9 @@ def test_missing_project_is_a_user_error(
     assert "knowledge" not in prompt.lower()
 
 
-def test_task_from_stdin_and_file_keeps_backticks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+def test_task_from_stdin_and_file_keeps_backticks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     task = "What does `ls -la` do?\n```sh\nls -la\n```"
     knowledge = "ls lists files. The -la flags show all files in long form."
 
@@ -146,10 +148,22 @@ def test_task_from_stdin_and_file_keeps_backticks(tmp_path: Path, monkeypatch: p
     task_file = tmp_path / "task.txt"
     task_file.write_text(task, encoding="utf-8")
     model = ScriptedModel(accepted("It lists files. [p1]", "p1"))
-    assert main(["ask", "--task-file", str(task_file), "--knowledge", knowledge, "--quiet"], client=model) == 0
+    assert (
+        main(
+            ["ask", "--task-file", str(task_file), "--knowledge", knowledge, "--quiet"],
+            client=model,
+        )
+        == 0
+    )
     assert task in str(model.calls[0]["user"])
 
-    assert main(["ask", "also here", "--task-file", str(task_file), "--knowledge", knowledge], client=model) == 2
+    assert (
+        main(
+            ["ask", "also here", "--task-file", str(task_file), "--knowledge", knowledge],
+            client=model,
+        )
+        == 2
+    )
     assert "not both" in capsys.readouterr().err
 
     class Tty(io.StringIO):
@@ -161,7 +175,9 @@ def test_task_from_stdin_and_file_keeps_backticks(tmp_path: Path, monkeypatch: p
     assert "Give a task" in capsys.readouterr().err
 
 
-def test_debug_flag_writes_every_call_to_the_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+def test_debug_flag_writes_every_call_to_the_log(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     monkeypatch.chdir(tmp_path)
     model = ScriptedModel(
         [
@@ -171,7 +187,14 @@ def test_debug_flag_writes_every_call_to_the_log(tmp_path: Path, monkeypatch: py
         ]
     )
     code = main(
-        ["ask", "Refund window?", "--knowledge", "Refunds last 14 days after purchase.", "--quiet", "--debug"],
+        [
+            "ask",
+            "Refund window?",
+            "--knowledge",
+            "Refunds last 14 days after purchase.",
+            "--quiet",
+            "--debug",
+        ],
         client=model,
     )
     assert code == 0
@@ -199,9 +222,10 @@ def test_serve_command_uses_the_loop(
 ) -> None:
     seen: dict[str, object] = {}
 
-    def fake_serve(loop: Loop, host: str, port: int) -> None:
+    def fake_serve(loop: Loop, host: str, port: int, session: str | None = None) -> None:
         seen["host"] = host
         seen["port"] = port
+        seen["session"] = session
         seen["passages"] = len(loop.knowledge.passages)
 
     monkeypatch.setattr("loopkit.cli.serve", fake_serve)
@@ -210,7 +234,21 @@ def test_serve_command_uses_the_loop(
         client=ScriptedModel([]),
     )
     assert code == 0
-    assert seen == {"host": "127.0.0.1", "port": 9, "passages": 1}
+    assert seen == {"host": "127.0.0.1", "port": 9, "session": None, "passages": 1}
+
+    code = main(
+        ["serve", "--knowledge", "Refunds last 14 days.", "--session"],
+        client=ScriptedModel([]),
+    )
+    assert code == 0
+    assert seen.get("session") == "loopkit-session.json"
+
+    code = main(
+        ["serve", "--knowledge", "Refunds last 14 days.", "--session", "runs/chats.json"],
+        client=ScriptedModel([]),
+    )
+    assert code == 0
+    assert seen.get("session") == "runs/chats.json"
     capsys.readouterr()
 
 

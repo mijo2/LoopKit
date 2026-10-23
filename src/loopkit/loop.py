@@ -37,7 +37,14 @@ from loopkit.prompts import (
     with_role,
 )
 from loopkit.retrieve import select
-from loopkit.schemas import Draft, DraftCheck, GroundingCheck, InstructionVerdict, OneCheck, RolePrefix
+from loopkit.schemas import (
+    Draft,
+    DraftCheck,
+    GroundingCheck,
+    InstructionVerdict,
+    OneCheck,
+    RolePrefix,
+)
 
 CheckMode = Literal["each", "all"]
 Mode = Literal["knowledge", "open"]

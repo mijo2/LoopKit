@@ -40,6 +40,14 @@ print(loop.ask("What is the refund window?"))
   - [Project file](#project-file)
 - [Use the answer](#use-the-answer)
 - [Command line](#command-line)
+- [Local UI](#local-ui)
+  - [Start it](#start-it)
+  - [Ask and follow up](#ask-and-follow-up)
+  - [Read an answer](#read-an-answer)
+  - [Tabs](#tabs)
+  - [Advanced options](#advanced-options)
+  - [Keep the chats across refreshes](#keep-the-chats-across-refreshes)
+  - [Use the routes from a script](#use-the-routes-from-a-script)
 - [What the model is allowed to do](#what-the-model-is-allowed-to-do)
 - [Example](#example)
 - [Status](#status)
@@ -106,7 +114,7 @@ From a checkout, `make` does the setup for you. The first call creates `.venv/` 
 cp .env.example .env                      # put one API key in it; .env is gitignored
 make init                                 # or: make example
 make ask Q="What is the refund window?"
-make serve                                # http://127.0.0.1:8080
+make serve                                # the local UI on http://127.0.0.1:8080, see "Local UI" below
 ```
 
 Keys are read from the environment, or from `api_key=`. Do not commit them.
@@ -371,10 +379,114 @@ answer.to_dict()   # JSON-ready, the same shape `loopkit ask --json` prints
 | --- | --- |
 | `loopkit init` | Writes `loopkit.toml` and `knowledge/start.md` in the current directory |
 | `loopkit ask "question"` | Answers from the project file. `--quiet` prints the answer only; `--json` prints the answer object; `-k/--knowledge`, `-i/--instructions` (repeatable), `--instructions-file`, `--model`, `--provider`, `--base-url`, `--max-turns`, `--check-mode`, `--response` override the file |
-| `loopkit serve` | A local page that posts to `POST /ask` with `{"task": "..."}`. `GET /health` returns `{"ok": true}`. `--host`, `--port`, `--trace` |
+| `loopkit serve` | The local UI: a chat with tabs and an options panel for every `Loop` setting. See [Local UI](#local-ui) |
 | `loopkit --version` | Prints the installed version |
 
-`loopkit serve` opens on http://127.0.0.1:8080. The process binds to `127.0.0.1` and has no authentication. Keep it off public networks.
+## Local UI
+
+`loopkit serve` is a page for trying the loop by hand: ask, read the audit trail, change a setting, ask again. It runs on your machine against the same `Loop` that `loopkit ask` and your code use, and everything it can do is in this section.
+
+### Start it
+
+You need what `loopkit ask` needs: one API key in the environment, or a local OpenAI-compatible server. From a checkout, `make` creates `.venv/` and installs on first use:
+
+```bash
+cp .env.example .env                                   # put one API key in it; .env is gitignored
+make serve                                             # http://127.0.0.1:8080, the project's loopkit.toml
+make serve PORT=9000                                   # another port
+make serve SESSION=runs/chats.json                     # keep the chats across refreshes, see below
+make serve ARGS="--knowledge docs/ --instructions-file rules.txt"   # any `loopkit serve` flag
+```
+
+Without `make`, the command is `loopkit serve`, with the same flags as `loopkit ask` (`--knowledge`, `--instructions`, `--instructions-file`, `--model`, `--provider`, `--base-url`, `--max-turns`, `--check-mode`, `--response`, `--search`, `--no-auto-optimize`, `--debug`) plus `--host`, `--port`, `--trace`, and `--session [FILE]`. With no `--knowledge` it reads `loopkit.toml` from the current directory, and with neither it runs in [open mode](#open-mode-no-knowledge-base).
+
+```bash
+loopkit serve                                          # http://127.0.0.1:8080
+loopkit serve --knowledge examples/northwind/knowledge --instructions-file examples/northwind/instructions.txt
+loopkit serve --port 9000 --trace --session
+```
+
+The page opens on a header, one chat tab, and a composer. The header says which provider and model the process loaded, whether it is in knowledge or open mode, how many passages it read, and which provider keys are set in the environment. Key values never reach the page; only whether each one is present.
+
+The server binds to `127.0.0.1` and has no authentication. Keep it off public networks.
+
+### Ask and follow up
+
+Type a question and press Enter (Shift+Enter adds a line). The loop runs as it does for `loopkit ask`: retrieve, optimize, draft, check each instruction and grounding, revise up to the turn limit. The tab shows "…" while it works.
+
+Each chat is a conversation. The first ask is sent as typed. For a follow-up, the page sends the earlier turns of that tab as `history`, and the server (`loopkit.serve.compose_task`) folds them into **one task string**, most recent first:
+
+```text
+User asked: <new question>; Previous conversation: [("<ask n-1>", "<final answer n-1>"), ("<ask n-2>", "<final answer n-2>"), ...]
+```
+
+The loop has no memory of its own and the library does not change. Only successful turns enter the history; an error does not. **Clear** empties the chat and its history.
+
+### Read an answer
+
+Under each answer, chips say whether it **passed** or **stopped after N turns**, the mode, the provider and model, the check mode and response kind, whether web search was on, and how many passages it cited. **Details** opens the audit trail:
+
+| Section | What it shows |
+| --- | --- |
+| Role written by the optimize step | The "You are a…" prefix used for every call of this ask, when auto-optimize is on |
+| Citations | Each `[pN]` the answer used, with its source, heading, and the passage text |
+| Checks | One block per turn: ✓ or ✗ for each instruction with the checker's note, the grounding (or accuracy) verdict, notes, and gaps |
+| Sent to the loop as one task | The composed task string, shown for follow-ups so you can see exactly what the loop received |
+| Settings used | The `Loop` settings that produced this answer |
+
+### Tabs
+
+**+** opens another chat. It starts from the settings of the tab it was opened from, then is on its own: its own history, its own options. Tabs take the first question as their title; **×** closes one (the last tab cannot be closed). A dot on a tab means its settings differ from the server's.
+
+### Advanced options
+
+The **Advanced options** button opens a panel of the arguments of `Loop(...)`. The panel belongs to one tab, named in its header, and its settings are used by that tab's next ask. An untouched form sends a plain `{"task": "..."}`; a changed one sends `options`, and the server builds a `Loop` for that request on the knowledge base already in memory, so the documents are not read again and the server's own settings are untouched. **Reset this tab to server settings** puts the tab back.
+
+| Option | What it does |
+| --- | --- |
+| Knowledge source | **This server's knowledge base** (what it read at startup), **None** for [open mode](#open-mode-no-knowledge-base), or **Pasted text** read as one document |
+| Instructions | One per line; each is checked on its own. Empty means the built-in list for the mode, shown greyed |
+| Provider, Model | Only providers with a key set can be picked. An empty model means that provider's default |
+| Base URL | An OpenAI-compatible server; implies the `compatible` provider |
+| Check mode | `each`: one model call per instruction, then grounding. `all`: every instruction in one call |
+| Response | `normal`, or `book` for a long answer with headings and a raised output cap |
+| Max turns, Top k, Context budget | The loop's `max_turns`, `top_k`, `context_budget` |
+| Web search | The provider's search tool in the draft and the audit ([Web search](#web-search)) |
+| Auto-optimize | The role-writing call before the loop ([Auto-optimize](#auto-optimize)) |
+
+### Keep the chats across refreshes
+
+By default the page forgets everything on a refresh. Start the server with a session file and it does not:
+
+```bash
+make serve SESSION=runs/chats.json
+loopkit serve --session                                # writes ./loopkit-session.json
+loopkit serve --session runs/chats.json
+```
+
+After every change (an answer, a new or closed tab, an edited option) the page sends its state to `PUT /session`. The server checks its shape and replaces the file in one step, so a crash mid-write cannot leave half a session. On the next visit the page reads `GET /session` before drawing anything and shows the same tabs, transcripts, audit trails, and options; a follow-up then carries the restored turns. An ask that was still running when the page closed is not kept. The header shows "session on" and when the last save happened.
+
+The file holds every answer in plain JSON, so treat it like the knowledge base it quotes. The default name is gitignored.
+
+### Use the routes from a script
+
+The page is four routes on the server, and they work from `curl` too:
+
+| Route | Body and result |
+| --- | --- |
+| `POST /ask` | `{"task": "...", "history": [[ask, answer], ...]?, "options": {...}?}`. Returns the answer object (`loopkit ask --json`) plus `task`, the string the loop received, and `loop`, the settings that produced it |
+| `GET /config` | What the server loaded: provider, model, mode, instructions, knowledge summary, the built-in instruction lists, which provider keys are set (never the values), and whether a session is on |
+| `GET /session`, `PUT /session` | Read and write the saved page state; 404 when the server was started without `--session` |
+| `GET /health` | `{"ok": true}` |
+
+```bash
+curl -s localhost:8080/config
+curl -s localhost:8080/ask -d '{"task": "Can I get a refund?"}'
+curl -s localhost:8080/ask -d '{"task": "And after that?", "history": [["Can I get a refund?", "Within 14 days of the charge. [p1]"]]}'
+curl -s localhost:8080/ask -d '{"task": "Can I get a refund?", "options": {"response": "book", "max_turns": 1, "knowledge_source": "none"}}'
+```
+
+A malformed `history`, an unknown or invalid option, or a session of the wrong shape is a 400 that names the problem. The option names are the ones `loopkit.serve.OPTION_KEYS` lists: `knowledge_source`, `knowledge_text`, `instructions`, `provider`, `model`, `base_url`, `max_turns`, `top_k`, `context_budget`, `check_mode`, `response`, `search`, `auto_optimize`.
 
 ## What the model is allowed to do
 
