@@ -14,7 +14,7 @@ from loopkit.debuglog import DEFAULT_DEBUG_FILE, logger
 from loopkit.errors import LoopError, LoopWarning
 from loopkit.loop import DEFAULT_MODEL, Loop, ModelClient
 from loopkit.models import Answer
-from loopkit.serve import serve
+from loopkit.serve import DEFAULT_SESSION_FILE, serve
 
 SAMPLE_KNOWLEDGE = """\
 # Sample knowledge
@@ -166,7 +166,7 @@ def main(argv: list[str] | None = None, *, client: ModelClient | None = None) ->
         action="store_true",
         help=(
             "Skip the optimize step. By default one call before the loop writes a role for the task "
-            "(\"You are a ...\") that prefixes every draft and check. Same as LOOPKIT_AUTO_OPTIMIZE=0."
+            '("You are a ...") that prefixes every draft and check. Same as LOOPKIT_AUTO_OPTIMIZE=0.'
         ),
     )
     shared.add_argument(
@@ -243,6 +243,16 @@ def main(argv: list[str] | None = None, *, client: ModelClient | None = None) ->
     serve_command.add_argument(
         "--trace", action="store_true", help="Print each loop step to stderr."
     )
+    serve_command.add_argument(
+        "--session",
+        nargs="?",
+        const=DEFAULT_SESSION_FILE,
+        metavar="FILE",
+        help=(
+            "Keep the page's chats in FILE so a refresh shows them again "
+            f"(default: {DEFAULT_SESSION_FILE}). Without this flag nothing is written."
+        ),
+    )
 
     commands.add_parser("init", help="Write loopkit.toml and a sample knowledge file")
 
@@ -275,7 +285,7 @@ def main(argv: list[str] | None = None, *, client: ModelClient | None = None) ->
                     "loopkit: listening beyond localhost with no authentication.",
                     file=sys.stderr,
                 )
-            serve(loop, args.host, args.port)
+            serve(loop, args.host, args.port, session=args.session)
             return 0
     except LoopError as exc:
         print(f"loopkit: {exc}", file=sys.stderr)

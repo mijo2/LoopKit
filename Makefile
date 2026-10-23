@@ -3,6 +3,7 @@
 #   make help            list targets
 #   make ask Q="..."     answer a question (creates the venv and installs on first use)
 #   make serve           local web page on http://127.0.0.1:8080
+#   make serve SESSION=chats.json   same, and keep the chats across refreshes
 #   make check           everything CI runs: lint, format, types, tests
 #
 # The virtual environment lives in .venv/ and is created on demand. A stamp
@@ -27,6 +28,7 @@ EXTRAS  ?= dev
 Q       ?= What is the refund window?
 HOST    ?= 127.0.0.1
 PORT    ?= 8080
+SESSION ?=
 ARGS    ?=
 
 ifeq ($(OS),Windows_NT)
@@ -79,8 +81,8 @@ doctor: $(STAMP) ## Show interpreter, version, and which provider keys are set
 ask: $(STAMP) ## Ask the project's knowledge base: make ask Q="..." [ARGS="--quiet"]
 	@$(BIN)/loopkit ask "$(Q)" $(ARGS)
 
-serve: $(STAMP) ## Serve the local page: make serve [HOST=127.0.0.1] [PORT=8080]
-	@$(BIN)/loopkit serve --host $(HOST) --port $(PORT) $(ARGS)
+serve: $(STAMP) ## Serve the local page: make serve [HOST=127.0.0.1] [PORT=8080] [SESSION=file.json]
+	@$(BIN)/loopkit serve --host $(HOST) --port $(PORT) $(if $(SESSION),--session "$(SESSION)",) $(ARGS)
 
 init: $(STAMP) ## Write loopkit.toml and knowledge/start.md in the current directory
 	@$(BIN)/loopkit init
